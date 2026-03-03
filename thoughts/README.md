@@ -11,6 +11,7 @@ discovered during development. These are not specs — they're a learning journa
 | 004 | [What Can We Solve Now? — Phase 0 Schema Extensions](004-what-can-we-solve-now.md) | Resolved | 2026-03-02 |
 | 005 | [Self-Practice — The System That Trains Itself](005-self-practice.md) | Active | 2026-03-03 |
 | 006 | [Reality Check — What Actually Works vs What's Aspirational](006-reality-check.md) | Active | 2026-03-03 |
+| 007 | [The First Concrete Task — Structured Data Extraction](007-first-concrete-task.md) | Active | 2026-03-03 |
 
 ## Status definitions
 
