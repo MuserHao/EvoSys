@@ -562,20 +562,25 @@ These are the hard, unsolved problems at the core of EvoSys:
 
 ## 8. Tech Stack Reference
 
-| Layer | Development | Production |
-|-------|------------|------------|
-| Orchestration | LangGraph / LlamaIndex Workflows | Same |
-| Primary LLM | Claude Opus 4 / GPT-4o | Same |
-| Skill LLM (synthesis) | Claude Sonnet | Same |
-| Tiny local models | Ollama + llama.cpp | Same |
-| Relational DB | SQLite | PostgreSQL |
-| Vector DB | ChromaDB | Qdrant |
+| Layer | Technology | Notes |
+|-------|-----------|-------|
+| Language | Python 3.12 | Pinned via `uv` |
+| Package manager | **uv** | Rust-based, 10-100x faster than pip, native lockfile |
+| Orchestration | **Hand-rolled** (no LangGraph) | Enum-based state machine + custom executor |
+| Primary LLM | Claude Opus 4 / GPT-4o via **LiteLLM** | Unified `completion()` across 100+ providers |
+| Skill LLM (synthesis) | Claude Sonnet via LiteLLM | Same |
+| Local model serving | **llama-cpp-python** | GGUF models on Metal GPU natively (no CUDA needed) |
+| Training | **PyTorch + PEFT/LoRA** | MPS backend for Apple Silicon |
+| Relational DB | SQLite (dev) / PostgreSQL (prod) | Via **SQLAlchemy 2.0** + **Alembic** |
+| Vector DB | **LanceDB** | Embedded (like SQLite), Pydantic-native, hybrid search |
 | Sandbox | Docker SDK for Python | Docker / WASM |
-| Embeddings | sentence-transformers | Same |
-| Clustering | scikit-learn (HDBSCAN, K-Means) | Same |
-| NLP (in skills) | spaCy | Same |
-| Dashboard | Streamlit | FastAPI + React |
-| Language | Python 3.11+ | Same |
+| Embeddings | **sentence-transformers** | Local embedding models |
+| Clustering | scikit-learn (**HDBSCAN**, K-Means) | Phase 2 optional group |
+| NLP (in skills) | **spaCy** | Phase 3 optional group |
+| Dashboard | **FastAPI + Jinja2 + HTMX** | No full SPA — server-rendered with live updates |
+| CLI | **typer** + **rich** | Type-hint based, auto-generated help |
+| JSON serialization | **orjson** | 3-10x faster than stdlib json |
+| Logging | **structlog** | Structured logging for trajectory hot path |
 
 ---
 

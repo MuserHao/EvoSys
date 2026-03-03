@@ -1,0 +1,24 @@
+# Runtime artifacts
+data/
+skills_store/
+
+# Virtual environment
+.venv/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+
+# Tools
+.ruff_cache/
+.pyright/
+
+# Secrets
+.env
+
+# OS
+.DS_Store
