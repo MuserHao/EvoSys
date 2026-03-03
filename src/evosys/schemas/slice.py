@@ -7,7 +7,7 @@ from typing import ClassVar
 
 from pydantic import Field, field_validator, model_validator
 
-from ._types import EvoBaseModel, ForgeStatus, UlidType, new_ulid, utc_now
+from ._types import EvoBaseModel, ForgeStatus, ImplementationType, UlidType, new_ulid, utc_now
 
 
 class SliceCandidate(EvoBaseModel):
@@ -25,6 +25,13 @@ class SliceCandidate(EvoBaseModel):
     boundary_confidence: float = Field(ge=0, le=1)
     forge_status: ForgeStatus = ForgeStatus.PENDING
     created_at: datetime = Field(default_factory=utc_now)
+
+    # Learnability signals (computed by reflection daemon)
+    determinism_ratio: float | None = Field(ge=0, le=1, default=None)
+    schema_consistency: float | None = Field(ge=0, le=1, default=None)
+    avg_output_tokens: int | None = Field(ge=0, default=None)
+    recommended_tier: ImplementationType | None = None
+    learnability_score: float | None = Field(ge=0, le=1, default=None)
 
     @field_validator("schema_version")
     @classmethod

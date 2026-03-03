@@ -1,10 +1,19 @@
-"""Tests for core types (Action, ActionPlan, Observation)."""
+"""Tests for core types."""
 
 from __future__ import annotations
 
+import pytest
 from ulid import ULID
 
-from evosys.core.types import Action, ActionPlan, Observation
+from evosys.core.types import (
+    Action,
+    ActionPlan,
+    IOPair,
+    LearnabilityAssessment,
+    Observation,
+    ShadowComparison,
+)
+from evosys.schemas import ImplementationType
 
 
 class TestAction:
@@ -43,8 +52,6 @@ class TestActionPlan:
         assert plan.reasoning == "Because reasons"
 
     def test_empty_actions_rejected(self) -> None:
-        import pytest
-
         with pytest.raises(ValueError, match="at least 1"):
             ActionPlan(task_description="Do nothing", actions=[])
 
@@ -85,3 +92,106 @@ class TestObservation:
         raw = obs.model_dump_orjson()
         restored = Observation.model_validate_orjson(raw)
         assert restored.action_id == sample_ulid
+
+
+class TestIOPair:
+    def test_construction(self) -> None:
+        pair = IOPair(
+            input_data={"html": "<p>Hello</p>"},
+            output_data={"text": "Hello"},
+        )
+        assert pair.input_data == {"html": "<p>Hello</p>"}
+        assert pair.output_data == {"text": "Hello"}
+        assert pair.trace_id is None
+
+    def test_with_trace_id(self, sample_ulid: ULID) -> None:
+        pair = IOPair(
+            input_data={"x": 1},
+            output_data={"y": 2},
+            trace_id=sample_ulid,
+        )
+        assert pair.trace_id == sample_ulid
+
+    def test_orjson_round_trip(self) -> None:
+        pair = IOPair(
+            input_data={"query": "test"},
+            output_data={"result": [1, 2, 3]},
+        )
+        raw = pair.model_dump_orjson()
+        restored = IOPair.model_validate_orjson(raw)
+        assert restored.input_data == pair.input_data
+        assert restored.output_data == pair.output_data
+
+
+class TestShadowComparison:
+    def test_agreement(self) -> None:
+        comp = ShadowComparison(
+            skill_output={"entities": ["Alice"]},
+            llm_output={"entities": ["Alice"]},
+            agreement=True,
+            similarity_score=1.0,
+        )
+        assert comp.agreement is True
+        assert comp.similarity_score == 1.0
+
+    def test_disagreement(self) -> None:
+        comp = ShadowComparison(
+            skill_output={"entities": ["Alice"]},
+            llm_output={"entities": ["Alice", "Bob"]},
+            agreement=False,
+            similarity_score=0.6,
+            notes="Skill missed entity 'Bob'",
+        )
+        assert comp.agreement is False
+        assert comp.notes == "Skill missed entity 'Bob'"
+
+    def test_orjson_round_trip(self) -> None:
+        comp = ShadowComparison(
+            skill_output={"x": 1},
+            llm_output={"x": 1},
+            agreement=True,
+            similarity_score=0.99,
+        )
+        raw = comp.model_dump_orjson()
+        restored = ShadowComparison.model_validate_orjson(raw)
+        assert restored.agreement is True
+        assert restored.similarity_score == 0.99
+
+
+class TestLearnabilityAssessment:
+    def test_construction(self) -> None:
+        assessment = LearnabilityAssessment(
+            determinism_ratio=0.95,
+            schema_consistency=0.92,
+            avg_output_tokens=50,
+            recommended_tier=ImplementationType.DETERMINISTIC,
+            learnability_score=0.93,
+            reasoning="High determinism, consistent schema, low output size",
+        )
+        assert assessment.recommended_tier == ImplementationType.DETERMINISTIC
+        assert assessment.learnability_score == 0.93
+
+    def test_hard_task_assessment(self) -> None:
+        assessment = LearnabilityAssessment(
+            determinism_ratio=0.3,
+            schema_consistency=0.5,
+            avg_output_tokens=2000,
+            recommended_tier=ImplementationType.CLOUD_LLM,
+            learnability_score=0.15,
+            reasoning="Low determinism, inconsistent schema, requires reasoning",
+        )
+        assert assessment.recommended_tier == ImplementationType.CLOUD_LLM
+        assert assessment.learnability_score == 0.15
+
+    def test_orjson_round_trip(self) -> None:
+        assessment = LearnabilityAssessment(
+            determinism_ratio=0.8,
+            schema_consistency=0.85,
+            avg_output_tokens=100,
+            recommended_tier=ImplementationType.CACHED_PROMPT,
+            learnability_score=0.65,
+        )
+        raw = assessment.model_dump_orjson()
+        restored = LearnabilityAssessment.model_validate_orjson(raw)
+        assert restored.recommended_tier == ImplementationType.CACHED_PROMPT
+        assert restored.learnability_score == 0.65

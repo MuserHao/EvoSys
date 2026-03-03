@@ -10,6 +10,7 @@ from pydantic import Field, field_validator, model_validator
 from ._types import (
     EvoBaseModel,
     ImplementationType,
+    MaturationStage,
     SemverStr,
     SkillStatus,
     UlidType,
@@ -41,6 +42,14 @@ class SkillRecord(EvoBaseModel):
     confidence_score: float = Field(ge=0, le=1, default=1.0)
     status: SkillStatus = SkillStatus.ACTIVE
     created_at: datetime = Field(default_factory=utc_now)
+
+    # Maturation & shadow-mode tracking
+    maturation_stage: MaturationStage = MaturationStage.OBSERVED
+    shadow_sample_rate: float = Field(ge=0, le=1, default=1.0)
+    shadow_agreement_rate: float | None = Field(ge=0, le=1, default=None)
+    total_shadow_comparisons: int = Field(ge=0, default=0)
+    tier_demotion_attempts: int = Field(ge=0, default=0)
+    current_tier: ImplementationType | None = None
 
     @field_validator("schema_version")
     @classmethod

@@ -8,7 +8,14 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 
-from evosys.core.types import Action, ActionPlan, Observation
+from evosys.core.types import (
+    Action,
+    ActionPlan,
+    IOPair,
+    LearnabilityAssessment,
+    Observation,
+    ShadowComparison,
+)
 from evosys.schemas.skill import SkillRecord
 from evosys.schemas.slice import SliceCandidate
 
@@ -55,3 +62,28 @@ class BaseForge(ABC):
     @abstractmethod
     async def forge(self, candidate: SliceCandidate) -> SkillRecord | None:
         """Attempt to forge *candidate*. Return the new SkillRecord on success."""
+
+
+class BaseShadowEvaluator(ABC):
+    """Compares a skill's output against cloud LLM ground truth."""
+
+    @abstractmethod
+    async def compare(
+        self,
+        skill_output: dict[str, object],
+        llm_output: dict[str, object],
+        output_schema: dict[str, object],
+    ) -> ShadowComparison:
+        """Compare *skill_output* against *llm_output* and return a verdict."""
+
+
+class BaseLearnabilityEstimator(ABC):
+    """Estimates how learnable a SliceCandidate is and recommends a tier."""
+
+    @abstractmethod
+    async def estimate(
+        self,
+        candidate: SliceCandidate,
+        examples: list[IOPair],
+    ) -> LearnabilityAssessment:
+        """Score *candidate*'s learnability and recommend an implementation tier."""

@@ -8,7 +8,7 @@ discovered during development. These are not specs — they're a learning journa
 | 001 | [Skill Taxonomy — What Is a Skill, Really?](001-skill-taxonomy.md) | Active | 2026-03-02 |
 | 002 | [Skill Maturation Pipeline — From Observation to Muscle Memory](002-skill-maturation-pipeline.md) | Active | 2026-03-02 |
 | 003 | [The Bootstrapping Problem — Who Teaches the Teacher?](003-bootstrapping-problem.md) | Open | 2026-03-02 |
-| 004 | [What Can We Solve Now? — Phase 0 Schema Extensions](004-what-can-we-solve-now.md) | Actionable | 2026-03-02 |
+| 004 | [What Can We Solve Now? — Phase 0 Schema Extensions](004-what-can-we-solve-now.md) | Resolved | 2026-03-02 |
 
 ## Status definitions
 

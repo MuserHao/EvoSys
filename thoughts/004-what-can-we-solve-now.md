@@ -1,7 +1,7 @@
 # Thought 004: What Can We Solve Now? — Phase 0 Schema Extensions
 
 **Date**: 2026-03-02
-**Status**: Actionable — ready for implementation when approved
+**Status**: Resolved — implemented in Phase 0 schema extensions
 **Depends on**: Thought 001, 002, 003
 
 ---

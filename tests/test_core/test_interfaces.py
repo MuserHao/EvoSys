@@ -7,11 +7,21 @@ import pytest
 from evosys.core.interfaces import (
     BaseExecutor,
     BaseForge,
+    BaseLearnabilityEstimator,
     BaseOrchestrator,
     BaseReflectionDaemon,
+    BaseShadowEvaluator,
     BaseSkill,
 )
-from evosys.core.types import Action, ActionPlan, Observation
+from evosys.core.types import (
+    Action,
+    ActionPlan,
+    IOPair,
+    LearnabilityAssessment,
+    Observation,
+    ShadowComparison,
+)
+from evosys.schemas import ImplementationType
 from evosys.schemas.skill import SkillRecord
 from evosys.schemas.slice import SliceCandidate
 
@@ -36,6 +46,14 @@ class TestCannotInstantiateABCs:
     def test_forge(self) -> None:
         with pytest.raises(TypeError, match="abstract"):
             BaseForge()  # type: ignore[abstract]
+
+    def test_shadow_evaluator(self) -> None:
+        with pytest.raises(TypeError, match="abstract"):
+            BaseShadowEvaluator()  # type: ignore[abstract]
+
+    def test_learnability_estimator(self) -> None:
+        with pytest.raises(TypeError, match="abstract"):
+            BaseLearnabilityEstimator()  # type: ignore[abstract]
 
 
 class TestPartialImplFails:
@@ -115,3 +133,61 @@ class TestConcreteSubclass:
         )
         result = await forge.forge(candidate)
         assert result is None
+
+    @pytest.mark.anyio()
+    async def test_concrete_shadow_evaluator(self) -> None:
+        class MyShadowEval(BaseShadowEvaluator):
+            async def compare(
+                self,
+                skill_output: dict[str, object],
+                llm_output: dict[str, object],
+                output_schema: dict[str, object],
+            ) -> ShadowComparison:
+                return ShadowComparison(
+                    skill_output=skill_output,
+                    llm_output=llm_output,
+                    agreement=skill_output == llm_output,
+                    similarity_score=1.0 if skill_output == llm_output else 0.5,
+                )
+
+        evaluator = MyShadowEval()
+        result = await evaluator.compare({"x": 1}, {"x": 1}, {})
+        assert result.agreement is True
+        assert result.similarity_score == 1.0
+
+        result2 = await evaluator.compare({"x": 1}, {"x": 2}, {})
+        assert result2.agreement is False
+
+    @pytest.mark.anyio()
+    async def test_concrete_learnability_estimator(self) -> None:
+        class MyEstimator(BaseLearnabilityEstimator):
+            async def estimate(
+                self,
+                candidate: SliceCandidate,
+                examples: list[IOPair],
+            ) -> LearnabilityAssessment:
+                return LearnabilityAssessment(
+                    determinism_ratio=0.9,
+                    schema_consistency=0.85,
+                    avg_output_tokens=100,
+                    recommended_tier=ImplementationType.ALGORITHMIC,
+                    learnability_score=0.8,
+                    reasoning="Looks deterministic enough for code synthesis",
+                )
+
+        from ulid import ULID
+
+        estimator = MyEstimator()
+        candidate = SliceCandidate(
+            action_sequence=["fetch", "parse"],
+            frequency=2,
+            occurrence_trace_ids=[ULID(), ULID()],
+            boundary_confidence=0.85,
+        )
+        examples = [
+            IOPair(input_data={"url": "a"}, output_data={"text": "b"}),
+            IOPair(input_data={"url": "c"}, output_data={"text": "d"}),
+        ]
+        result = await estimator.estimate(candidate, examples)
+        assert result.recommended_tier == ImplementationType.ALGORITHMIC
+        assert result.learnability_score == 0.8

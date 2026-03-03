@@ -72,10 +72,25 @@ SemverStr = Annotated[str, BeforeValidator(_validate_semver)]
 
 
 class ImplementationType(StrEnum):
-    PYTHON_FN = "python_fn"
-    PROMPT_CACHE = "prompt_cache"
-    TINY_MODEL = "tiny_model"
-    COMPOSITE = "composite"
+    """Six-tier skill implementation hierarchy (Tier 0-5) plus composite."""
+
+    DETERMINISTIC = "deterministic"  # Tier 0: regex, lookup, pure math
+    ALGORITHMIC = "algorithmic"  # Tier 1: Python + libraries (spaCy, etc.)
+    CACHED_PROMPT = "cached_prompt"  # Tier 2: few-shot on local model
+    FINE_TUNED_MODEL = "fine_tuned_model"  # Tier 3: LoRA/QLoRA local model
+    CLOUD_LLM = "cloud_llm"  # Tier 4: single API call w/ template
+    AGENT_DELEGATION = "agent_delegation"  # Tier 5: full agent handoff
+    COMPOSITE = "composite"  # Chain of any of the above
+
+
+class MaturationStage(StrEnum):
+    """Lifecycle maturation stage of a skill."""
+
+    OBSERVED = "observed"  # Pattern detected, data accumulating
+    PROMPTED = "prompted"  # Cached prompt created, in shadow mode
+    SYNTHESIZED = "synthesized"  # Code generated, validating
+    OPTIMIZED = "optimized"  # Production-ready, periodic shadow checks
+    STABLE = "stable"  # Long-term proven, minimal monitoring
 
 
 class SkillStatus(StrEnum):
