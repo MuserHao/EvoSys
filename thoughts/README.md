@@ -9,6 +9,8 @@ discovered during development. These are not specs — they're a learning journa
 | 002 | [Skill Maturation Pipeline — From Observation to Muscle Memory](002-skill-maturation-pipeline.md) | Active | 2026-03-02 |
 | 003 | [The Bootstrapping Problem — Who Teaches the Teacher?](003-bootstrapping-problem.md) | Open | 2026-03-02 |
 | 004 | [What Can We Solve Now? — Phase 0 Schema Extensions](004-what-can-we-solve-now.md) | Resolved | 2026-03-02 |
+| 005 | [Self-Practice — The System That Trains Itself](005-self-practice.md) | Active | 2026-03-03 |
+| 006 | [Reality Check — What Actually Works vs What's Aspirational](006-reality-check.md) | Active | 2026-03-03 |
 
 ## Status definitions
 
