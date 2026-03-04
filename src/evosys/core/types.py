@@ -63,3 +63,22 @@ class LearnabilityAssessment(EvoBaseModel):
     recommended_tier: ImplementationType
     learnability_score: float = Field(ge=0, le=1)
     reasoning: str = ""
+
+
+class ToolCall(EvoBaseModel):
+    """A tool call requested by the LLM."""
+
+    call_id: str = Field(min_length=1)
+    tool_name: str = Field(min_length=1)
+    arguments: dict[str, object] = Field(default_factory=dict)
+
+
+class ToolResult(EvoBaseModel):
+    """The result of executing a single tool call."""
+
+    call_id: str = Field(min_length=1)
+    tool_name: str = Field(min_length=1)
+    success: bool
+    result: dict[str, object] = Field(default_factory=dict)
+    error: str | None = None
+    latency_ms: float = Field(ge=0, default=0)

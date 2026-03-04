@@ -17,8 +17,72 @@ from evosys.config import EvoSysConfig
 from evosys.loop import EvolveCycleResult
 
 log = structlog.get_logger()
-app = typer.Typer(name="evosys", help="EvoSys — self-evolving extraction agent.")
+app = typer.Typer(name="evosys", help="EvoSys — self-evolving general-purpose agent.")
 console = Console()
+
+
+# ---------------------------------------------------------------------------
+# evosys run
+# ---------------------------------------------------------------------------
+
+@app.command("run")
+def run_task(
+    task: str = typer.Argument(help="Task description for the agent."),
+    output_format: str = typer.Option(
+        "pretty",
+        "--format",
+        "-f",
+        help="Output format: json or pretty.",
+    ),
+    db_url: str = typer.Option(
+        "sqlite+aiosqlite:///data/evosys.db",
+        "--db",
+        help="Database URL.",
+    ),
+    max_iterations: int = typer.Option(
+        20,
+        "--max-iter",
+        help="Maximum agent loop iterations.",
+    ),
+) -> None:
+    """Run the general-purpose agent on a task."""
+    cfg = EvoSysConfig(db_url=db_url, agent_max_iterations=max_iterations)
+
+    try:
+        result = asyncio.run(_run_agent(cfg, task))
+    except Exception as exc:
+        console.print(f"[red]Agent failed:[/red] {exc}")
+        raise typer.Exit(code=1) from exc
+
+    if output_format == "pretty":
+        console.print()
+        console.print("[bold]Answer:[/bold]")
+        console.print(result.answer)
+        console.print()
+        console.print(f"[dim]Session:[/dim]    {result.session_id}")
+        console.print(f"[dim]Tokens:[/dim]     {result.total_tokens}")
+        console.print(f"[dim]Latency:[/dim]    {result.total_latency_ms:.0f}ms")
+        console.print(f"[dim]Iterations:[/dim] {result.iterations}")
+        console.print(f"[dim]Tool calls:[/dim] {len(result.tool_calls_made)}")
+    else:
+        output = {
+            "answer": result.answer,
+            "total_tokens": result.total_tokens,
+            "total_latency_ms": round(result.total_latency_ms, 1),
+            "session_id": result.session_id,
+            "iterations": result.iterations,
+            "tool_calls_count": len(result.tool_calls_made),
+        }
+        sys.stdout.write(json.dumps(output, default=str, indent=2) + "\n")
+
+
+async def _run_agent(cfg: EvoSysConfig, task: str):
+
+    runtime = await bootstrap(cfg)
+    try:
+        return await runtime.general_agent.run(task=task)
+    finally:
+        await runtime.shutdown()
 
 
 # ---------------------------------------------------------------------------
@@ -330,6 +394,7 @@ def serve(
     console.print()
     console.print("Endpoints:")
     console.print("  POST /extract    — extract structured data from a URL")
+    console.print("  POST /agent/run  — run the general-purpose agent")
     console.print("  GET  /skills     — list registered skills")
     console.print("  GET  /status     — system health & evolution metrics")
     console.print("  POST /evolve     — manually trigger an evolution cycle")

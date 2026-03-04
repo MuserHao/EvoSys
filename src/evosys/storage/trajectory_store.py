@@ -121,6 +121,20 @@ class TrajectoryStore:
                 by_domain.setdefault(domain, []).append(self._from_row(row))
         return by_domain
 
+    async def get_tool_trajectories(
+        self, *, limit: int = 5000
+    ) -> list[TrajectoryRecord]:
+        """Retrieve all ``tool:*`` action records for sequence detection."""
+        async with self._session_factory() as session:
+            stmt = (
+                select(TrajectoryRow)
+                .where(TrajectoryRow.action_name.startswith("tool:"))
+                .order_by(TrajectoryRow.timestamp_utc.desc())
+                .limit(limit)
+            )
+            result = await session.execute(stmt)
+            return [self._from_row(row) for row in result.scalars().all()]
+
     @staticmethod
     def _to_row(record: TrajectoryRecord) -> TrajectoryRow:
         """Convert a Pydantic record to an ORM row."""

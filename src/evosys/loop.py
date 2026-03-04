@@ -1,11 +1,12 @@
 """Evolution loop — ties reflection, forging, and registration together.
 
 A single ``evolve_cycle`` call:
-1. Runs the reflection daemon's pattern detector to discover patterns.
+1. Runs the reflection daemon's pattern detector to discover domain patterns.
 2. For each pattern, checks if a skill already covers the domain.
 3. Attempts to forge new skills for uncovered domains.
-4. Optionally shadow-evaluates forged skills against stored LLM outputs.
-5. Returns a summary of what was discovered and forged.
+4. Detects recurring tool-call sequences across agent sessions.
+5. Forges composite skills for frequent sequences.
+6. Returns a summary of what was discovered and forged.
 """
 
 from __future__ import annotations
@@ -15,14 +16,17 @@ from dataclasses import dataclass, field
 import structlog
 from ulid import ULID
 
+from evosys.forge.composite_forge import CompositeForge
 from evosys.forge.forge import SkillForge
 from evosys.reflection.pattern_detector import PatternCandidate, PatternDetector
+from evosys.reflection.sequence_detector import SequenceDetector
 from evosys.reflection.shadow_evaluator import ShadowEvaluator
 from evosys.schemas._types import ForgeStatus, new_ulid
 from evosys.schemas.skill import SkillRecord
 from evosys.schemas.slice import SliceCandidate
 from evosys.skills.registry import SkillRegistry
 from evosys.storage.trajectory_store import TrajectoryStore
+from evosys.tools.registry import ToolRegistry
 
 log = structlog.get_logger()
 
@@ -36,6 +40,9 @@ class EvolveCycleResult:
     forge_attempted: int
     forge_succeeded: int
     new_skills: list[SkillRecord] = field(default_factory=list)
+    # Phase 9: tool-call sequence detection
+    sequences_detected: int = 0
+    composites_forged: int = 0
 
 
 class EvolutionLoop:
@@ -49,38 +56,29 @@ class EvolutionLoop:
         *,
         min_frequency: int = 3,
         shadow_evaluator: ShadowEvaluator | None = None,
+        tool_registry: ToolRegistry | None = None,
+        composite_forge: CompositeForge | None = None,
+        sequence_detector: SequenceDetector | None = None,
     ) -> None:
         self._store = store
         self._forge = forge
         self._registry = registry
         self._detector = PatternDetector(min_frequency=min_frequency)
         self._shadow = shadow_evaluator or ShadowEvaluator()
+        self._tool_registry = tool_registry
+        self._composite_forge = composite_forge
+        self._sequence_detector = sequence_detector or SequenceDetector(
+            min_frequency=min_frequency
+        )
 
     async def run_cycle(self) -> EvolveCycleResult:
         """Execute one evolution cycle and return a summary."""
-        # 1. Query trajectory store for LLM extractions grouped by domain
+        # Path 1: domain-based pattern detection (existing)
         records_by_domain = await self._store.get_llm_extractions_by_domain()
 
-        if not records_by_domain:
-            log.info("evolve.no_data")
-            return EvolveCycleResult(
-                candidates_found=0,
-                already_covered=0,
-                forge_attempted=0,
-                forge_succeeded=0,
-            )
-
-        # 2. Detect patterns
-        patterns = self._detector.detect(records_by_domain)
-
-        if not patterns:
-            log.info("evolve.no_patterns")
-            return EvolveCycleResult(
-                candidates_found=0,
-                already_covered=0,
-                forge_attempted=0,
-                forge_succeeded=0,
-            )
+        patterns: list[PatternCandidate] = []
+        if records_by_domain:
+            patterns = self._detector.detect(records_by_domain)
 
         already_covered = 0
         forge_attempted = 0
@@ -124,12 +122,35 @@ class EvolutionLoop:
                     shadow_agreement=record.shadow_agreement_rate,
                 )
 
+        # Path 2: tool-call sequence detection (Phase 9)
+        sequences_detected = 0
+        composites_forged = 0
+
+        if self._composite_forge is not None and self._tool_registry is not None:
+            tool_records = await self._store.get_tool_trajectories()
+            if tool_records:
+                seq_candidates = self._sequence_detector.detect(tool_records)
+                sequences_detected = len(seq_candidates)
+
+                for seq_candidate in seq_candidates:
+                    record = await self._composite_forge.forge(seq_candidate)
+                    if record is not None:
+                        composites_forged += 1
+                        new_skills.append(record)
+                        log.info(
+                            "evolve.composite_forged",
+                            skill_name=record.name,
+                            sequence=seq_candidate.canonical_form,
+                        )
+
         result = EvolveCycleResult(
             candidates_found=len(patterns),
             already_covered=already_covered,
             forge_attempted=forge_attempted,
             forge_succeeded=forge_succeeded,
             new_skills=new_skills,
+            sequences_detected=sequences_detected,
+            composites_forged=composites_forged,
         )
 
         log.info(
@@ -138,6 +159,8 @@ class EvolutionLoop:
             covered=result.already_covered,
             attempted=result.forge_attempted,
             succeeded=result.forge_succeeded,
+            sequences=result.sequences_detected,
+            composites=result.composites_forged,
         )
 
         return result

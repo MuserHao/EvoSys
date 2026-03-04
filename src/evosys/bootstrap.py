@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 
+import structlog
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
+from evosys.agents.agent import Agent
 from evosys.agents.extraction_agent import ExtractionAgent
 from evosys.config import EvoSysConfig
 from evosys.executors.http_executor import HttpExecutor
@@ -19,7 +22,12 @@ from evosys.skills.loader import register_builtin_skills
 from evosys.skills.registry import SkillRegistry
 from evosys.storage.engine import dispose_engine, init_engine, make_session_factory
 from evosys.storage.trajectory_store import TrajectoryStore
+from evosys.tools.builtins import ExtractStructuredTool, WebFetchTool
+from evosys.tools.mcp import MCPManager, MCPServerConfig
+from evosys.tools.registry import ToolRegistry
 from evosys.trajectory.logger import TrajectoryLogger
+
+log = structlog.get_logger()
 
 
 @dataclass(slots=True)
@@ -36,13 +44,22 @@ class EvoSysRuntime:
     skill_registry: SkillRegistry
     skill_executor: SkillExecutor
     routing_orchestrator: RoutingOrchestrator
-    agent: ExtractionAgent
+    extraction_agent: ExtractionAgent
     synthesizer: SkillSynthesizer
     forge: SkillForge
     evolution_loop: EvolutionLoop
+    tool_registry: ToolRegistry
+    general_agent: Agent
+    mcp_manager: MCPManager
+
+    # Backward compat alias
+    @property
+    def agent(self) -> ExtractionAgent:
+        return self.extraction_agent
 
     async def shutdown(self) -> None:
-        """Dispose of the database engine."""
+        """Dispose of the database engine and MCP connections."""
+        await self.mcp_manager.disconnect_all()
         await dispose_engine(self.engine)
 
 
@@ -82,7 +99,7 @@ async def bootstrap(
         confidence_threshold=cfg.skill_confidence_threshold,
     )
 
-    agent = ExtractionAgent(
+    extraction_agent = ExtractionAgent(
         llm=llm,
         http=http_executor,
         trajectory_logger=trajectory_logger,
@@ -96,6 +113,41 @@ async def bootstrap(
         trajectory_store, forge, skill_registry
     )
 
+    # Tool registry + built-in tools
+    tool_registry = ToolRegistry(
+        skill_registry, min_confidence=cfg.skill_confidence_threshold
+    )
+    web_fetch_tool = WebFetchTool(http_executor)
+    extract_tool = ExtractStructuredTool(extraction_agent)
+    tool_registry.register_external(web_fetch_tool)
+    tool_registry.register_external(extract_tool)
+
+    # MCP integration
+    mcp_manager = MCPManager()
+    try:
+        mcp_configs = json.loads(cfg.mcp_servers)
+        if isinstance(mcp_configs, list):
+            for mcp_cfg_dict in mcp_configs:
+                try:
+                    mcp_config = MCPServerConfig(**mcp_cfg_dict)
+                    tools = await mcp_manager.connect(mcp_config)
+                    for tool in tools:
+                        tool_registry.register_external(tool)
+                except Exception:
+                    log.exception("bootstrap.mcp_connect_failed")
+    except (json.JSONDecodeError, TypeError):
+        pass  # No valid MCP config
+
+    # General agent
+    agent_logger = TrajectoryLogger(trajectory_store)
+    general_agent = Agent(
+        llm=llm,
+        tool_registry=tool_registry,
+        trajectory_logger=agent_logger,
+        max_iterations=cfg.agent_max_iterations,
+        system_prompt=cfg.agent_system_prompt,
+    )
+
     return EvoSysRuntime(
         config=cfg,
         engine=engine,
@@ -107,8 +159,11 @@ async def bootstrap(
         skill_registry=skill_registry,
         skill_executor=skill_executor,
         routing_orchestrator=routing_orchestrator,
-        agent=agent,
+        extraction_agent=extraction_agent,
         synthesizer=synthesizer,
         forge=forge,
         evolution_loop=evolution_loop,
+        tool_registry=tool_registry,
+        general_agent=general_agent,
+        mcp_manager=mcp_manager,
     )

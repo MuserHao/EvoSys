@@ -2,6 +2,7 @@
 
 Starts a server with:
 - POST /extract — structured data extraction from URLs
+- POST /agent/run — general-purpose agent task execution
 - GET /skills — list registered skills
 - GET /status — system health and evolution metrics
 
@@ -57,6 +58,20 @@ class ExtractResponse(BaseModel):
     total_latency_ms: float
     session_id: str
     skill_used: str | None = None
+
+
+class AgentRunRequest(BaseModel):
+    task: str
+    context: dict[str, Any] | None = None
+
+
+class AgentRunResponse(BaseModel):
+    answer: str
+    total_tokens: int
+    total_latency_ms: float
+    session_id: str
+    iterations: int
+    tool_calls_count: int
 
 
 class SkillInfo(BaseModel):
@@ -170,7 +185,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="EvoSys",
-    description="Self-evolving extraction agent",
+    description="Self-evolving general-purpose agent",
     version="0.1.0",
     lifespan=lifespan,
 )
@@ -181,7 +196,7 @@ async def extract(req: ExtractRequest) -> ExtractResponse:
     """Extract structured data from a URL."""
     assert _runtime is not None, "Runtime not initialised"
 
-    result = await _runtime.agent.extract(
+    result = await _runtime.extraction_agent.extract(
         url=req.url,
         target_schema=req.schema_description,
         system_prompt=req.system_prompt,
@@ -194,6 +209,26 @@ async def extract(req: ExtractRequest) -> ExtractResponse:
         total_latency_ms=result.total_latency_ms,
         session_id=result.session_id,
         skill_used=result.skill_used,
+    )
+
+
+@app.post("/agent/run", response_model=AgentRunResponse)
+async def agent_run(req: AgentRunRequest) -> AgentRunResponse:
+    """Run the general-purpose agent on a task."""
+    assert _runtime is not None, "Runtime not initialised"
+
+    result = await _runtime.general_agent.run(
+        task=req.task,
+        context=req.context,
+    )
+
+    return AgentRunResponse(
+        answer=result.answer,
+        total_tokens=result.total_tokens,
+        total_latency_ms=result.total_latency_ms,
+        session_id=result.session_id,
+        iterations=result.iterations,
+        tool_calls_count=len(result.tool_calls_made),
     )
 
 

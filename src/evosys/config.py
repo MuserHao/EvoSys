@@ -17,6 +17,14 @@ class EvoSysConfig:
     http_timeout_s: float = 30.0
     http_max_body_bytes: int = 5_000_000
     skill_confidence_threshold: float = 0.7
+    agent_max_iterations: int = 20
+    agent_system_prompt: str = (
+        "You are a helpful general-purpose assistant. "
+        "Use the available tools to accomplish the user's task. "
+        "Think step by step. When you have enough information to "
+        "answer, respond directly without calling more tools."
+    )
+    mcp_servers: str = "[]"
 
     @classmethod
     def from_env(cls) -> EvoSysConfig:
@@ -36,4 +44,10 @@ class EvoSysConfig:
             kwargs["http_max_body_bytes"] = int(v)
         if v := os.environ.get("EVOSYS_SKILL_CONFIDENCE_THRESHOLD"):
             kwargs["skill_confidence_threshold"] = float(v)
+        if v := os.environ.get("EVOSYS_AGENT_MAX_ITERATIONS"):
+            kwargs["agent_max_iterations"] = int(v)
+        if v := os.environ.get("EVOSYS_AGENT_SYSTEM_PROMPT"):
+            kwargs["agent_system_prompt"] = v
+        if v := os.environ.get("EVOSYS_MCP_SERVERS"):
+            kwargs["mcp_servers"] = v
         return cls(**kwargs)  # type: ignore[arg-type]
