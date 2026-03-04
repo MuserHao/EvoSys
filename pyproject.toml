@@ -32,6 +32,7 @@ dependencies = [
 
     # Database
     "sqlalchemy>=2.0",
+    "greenlet>=3.0",
     "alembic>=1.13",
     "aiosqlite>=0.20",
 
