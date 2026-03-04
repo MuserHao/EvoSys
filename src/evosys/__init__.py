@@ -1,6 +1,7 @@
 """EvoSys — A self-evolving autonomous agent ecosystem."""
 
 from evosys.agents import ExtractionAgent, ExtractionError, ExtractionResult
+from evosys.bootstrap import EvoSysRuntime, bootstrap
 from evosys.config import EvoSysConfig
 from evosys.executors import HttpExecutor, SkillExecutor
 from evosys.llm import LLMClient, LLMError, LLMResponse
@@ -14,6 +15,7 @@ __version__ = "0.1.0"
 
 __all__ = [
     "EvoSysConfig",
+    "EvoSysRuntime",
     "ExtractionAgent",
     "ExtractionError",
     "ExtractionOrchestrator",
@@ -32,6 +34,7 @@ __all__ = [
     "TrajectoryRecord",
     "TrajectoryStore",
     "__version__",
+    "bootstrap",
     "init_engine",
     "make_session_factory",
 ]
