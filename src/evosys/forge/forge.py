@@ -11,7 +11,7 @@ import structlog
 from evosys.core.interfaces import BaseForge, BaseSkill
 from evosys.core.types import IOPair
 from evosys.forge.synthesizer import SkillSynthesizer
-from evosys.schemas._types import ImplementationType, new_ulid
+from evosys.schemas._types import ImplementationType, MaturationStage, new_ulid
 from evosys.schemas.skill import SkillRecord
 from evosys.schemas.slice import SliceCandidate
 from evosys.skills.registry import SkillRegistry
@@ -126,6 +126,11 @@ class SkillForge(BaseForge):
 
         # 5. Create and register
         skill = _SynthesizedSkill(extract_fn)
+
+        # Infer schemas from I/O pairs
+        input_schema = _infer_schema(sample_inputs) if sample_inputs else {}
+        output_schema = _infer_schema(sample_outputs) if sample_outputs else {}
+
         record = SkillRecord(
             skill_id=new_ulid(),
             name=skill_name,
@@ -137,6 +142,10 @@ class SkillForge(BaseForge):
             confidence_score=min(
                 1.0, candidate.boundary_confidence * (pass_rate if total > 0 else 0.5)
             ),
+            input_schema=input_schema,
+            output_schema=output_schema,
+            created_from_traces=list(candidate.occurrence_trace_ids),
+            maturation_stage=MaturationStage.SYNTHESIZED,
         )
 
         try:
@@ -209,3 +218,19 @@ def _outputs_match(actual: dict[str, object], expected: dict[str, object]) -> bo
         if str(actual[key]).strip().lower() != str(expected[key]).strip().lower():
             return False
     return True
+
+
+def _infer_schema(samples: list[dict[str, object]]) -> dict[str, object]:
+    """Infer a minimal schema from sample dicts.
+
+    Returns a dict mapping field names to their inferred Python type names.
+    """
+    if not samples:
+        return {}
+
+    schema: dict[str, object] = {}
+    for sample in samples:
+        for key, value in sample.items():
+            if key not in schema:
+                schema[key] = type(value).__name__
+    return schema

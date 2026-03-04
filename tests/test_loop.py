@@ -225,3 +225,49 @@ class TestEvolutionLoop:
         assert result.already_covered == 1
         assert result.forge_attempted == 1
         assert result.forge_succeeded == 1
+
+
+class TestShadowEvaluation:
+    async def test_shadow_evaluates_forged_skill(self):
+        """When a forge succeeds and the skill is in the registry,
+        shadow evaluation should run and update shadow metrics."""
+        from evosys.core.interfaces import BaseSkill
+
+        class EchoSkill(BaseSkill):
+            async def invoke(self, d: dict[str, object]) -> dict[str, object]:
+                return {"title": "Test"}
+
+            def validate(self) -> bool:
+                return True
+
+        store = _mock_store({"example.com": 5})
+        registry = SkillRegistry()
+
+        # Create a forge mock that actually registers the skill
+        forge = AsyncMock(spec=SkillForge)
+
+        async def _forge_and_register(candidate, domain=""):
+            rec = SkillRecord(
+                skill_id=new_ulid(),
+                name=f"extract:{domain}",
+                description=f"Forged for {domain}",
+                implementation_type=ImplementationType.ALGORITHMIC,
+                implementation_path=f"forge:synthesized:{domain}",
+                test_suite_path="auto-generated",
+                pass_rate=1.0,
+                confidence_score=0.8,
+            )
+            registry.register(rec, EchoSkill())
+            return rec
+
+        forge.forge = AsyncMock(side_effect=_forge_and_register)
+
+        loop = EvolutionLoop(store, forge, registry)
+        result = await loop.run_cycle()
+
+        assert result.forge_succeeded == 1
+        skill = result.new_skills[0]
+        # Shadow eval should have run (sample_results from _mock_store
+        # contain {"title": "Test"} which matches EchoSkill output)
+        assert skill.shadow_agreement_rate is not None
+        assert skill.total_shadow_comparisons > 0

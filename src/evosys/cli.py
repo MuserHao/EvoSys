@@ -307,6 +307,42 @@ def info() -> None:
     console.print(f"  Skill threshold:{cfg.skill_confidence_threshold}")
 
 
+# ---------------------------------------------------------------------------
+# evosys serve
+# ---------------------------------------------------------------------------
+
+@app.command()
+def serve(
+    host: str = typer.Option("0.0.0.0", "--host", help="Bind address."),
+    port: int = typer.Option(8000, "--port", help="Listen port."),
+    evolve_interval: int = typer.Option(
+        300,
+        "--evolve-interval",
+        help="Seconds between background evolution cycles.",
+    ),
+) -> None:
+    """Start the EvoSys HTTP server with background evolution."""
+    import uvicorn
+
+    console.print("[bold]Starting EvoSys server...[/bold]")
+    console.print(f"  Host:             {host}:{port}")
+    console.print(f"  Evolve interval:  {evolve_interval}s")
+    console.print()
+    console.print("Endpoints:")
+    console.print("  POST /extract    — extract structured data from a URL")
+    console.print("  GET  /skills     — list registered skills")
+    console.print("  GET  /status     — system health & evolution metrics")
+    console.print("  POST /evolve     — manually trigger an evolution cycle")
+    console.print()
+
+    uvicorn.run(
+        "evosys.server:app",
+        host=host,
+        port=port,
+        log_level="info",
+    )
+
+
 def main() -> None:
     """Entry point for the CLI."""
     app()
