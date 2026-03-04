@@ -33,6 +33,19 @@ class TestSkillsList:
 
 class TestExtractValidation:
     def test_missing_schema_file(self):
-        result = runner.invoke(app, ["extract", "https://example.com", "-s", "@nonexistent.json"])
+        result = runner.invoke(
+            app,
+            ["extract", "https://example.com", "-s", "@nonexistent.json"],
+        )
         assert result.exit_code == 1
         assert "not found" in result.output
+
+
+class TestReflect:
+    def test_empty_db_shows_no_patterns(self):
+        result = runner.invoke(
+            app,
+            ["reflect", "--db", "sqlite+aiosqlite:///:memory:"],
+        )
+        assert result.exit_code == 0
+        assert "No patterns found" in result.output

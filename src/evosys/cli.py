@@ -155,6 +155,67 @@ def skills_list(
 
 
 # ---------------------------------------------------------------------------
+# evosys reflect
+# ---------------------------------------------------------------------------
+
+@app.command()
+def reflect(
+    min_frequency: int = typer.Option(
+        3, "--min-freq", help="Minimum occurrences to consider a pattern."
+    ),
+    db_url: str = typer.Option(
+        "sqlite+aiosqlite:///data/evosys.db",
+        "--db",
+        help="Database URL.",
+    ),
+) -> None:
+    """Run a reflection cycle to discover skill candidates."""
+    cfg = EvoSysConfig(db_url=db_url)
+
+    try:
+        candidates = asyncio.run(_run_reflect(cfg, min_frequency))
+    except Exception as exc:
+        console.print(f"[red]Reflection failed:[/red] {exc}")
+        raise typer.Exit(code=1) from exc
+
+    if not candidates:
+        console.print("[dim]No patterns found.[/dim]")
+        return
+
+    table = Table(title="Discovered Patterns")
+    table.add_column("Domain", style="cyan")
+    table.add_column("Frequency", justify="right")
+    table.add_column("Confidence", justify="right")
+    table.add_column("Status")
+
+    for c in candidates:
+        table.add_row(
+            ", ".join(c.action_sequence),
+            str(c.frequency),
+            f"{c.boundary_confidence:.2f}",
+            c.forge_status.value,
+        )
+
+    console.print(table)
+    console.print(f"\n[green]{len(candidates)}[/green] candidate(s) found.")
+
+
+async def _run_reflect(
+    cfg: EvoSysConfig, min_frequency: int
+) -> list:
+    from evosys.reflection.daemon import ReflectionDaemon
+
+    runtime = await bootstrap(cfg)
+    try:
+        daemon = ReflectionDaemon(
+            runtime.trajectory_store, min_frequency=min_frequency
+        )
+        return await daemon.run_cycle()
+    finally:
+        await runtime.shutdown()
+
+
+# ---------------------------------------------------------------------------
 # evosys info
 # ---------------------------------------------------------------------------
 
