@@ -14,6 +14,7 @@ from rich.table import Table
 from evosys.agents.extraction_agent import ExtractionResult
 from evosys.bootstrap import bootstrap
 from evosys.config import EvoSysConfig
+from evosys.loop import EvolveCycleResult
 
 log = structlog.get_logger()
 app = typer.Typer(name="evosys", help="EvoSys — self-evolving extraction agent.")
@@ -211,6 +212,80 @@ async def _run_reflect(
             runtime.trajectory_store, min_frequency=min_frequency
         )
         return await daemon.run_cycle()
+    finally:
+        await runtime.shutdown()
+
+
+# ---------------------------------------------------------------------------
+# evosys evolve
+# ---------------------------------------------------------------------------
+
+@app.command()
+def evolve(
+    min_frequency: int = typer.Option(
+        3, "--min-freq", help="Minimum occurrences to consider a pattern."
+    ),
+    db_url: str = typer.Option(
+        "sqlite+aiosqlite:///data/evosys.db",
+        "--db",
+        help="Database URL.",
+    ),
+) -> None:
+    """Run one evolution cycle: reflect → forge → register."""
+    cfg = EvoSysConfig(db_url=db_url)
+
+    try:
+        result = asyncio.run(_run_evolve(cfg, min_frequency))
+    except Exception as exc:
+        console.print(f"[red]Evolution cycle failed:[/red] {exc}")
+        raise typer.Exit(code=1) from exc
+
+    console.print()
+    console.print("[bold]Evolution Cycle Complete[/bold]")
+    console.print(f"  Patterns found:   {result.candidates_found}")
+    console.print(f"  Already covered:  {result.already_covered}")
+    console.print(f"  Forge attempted:  {result.forge_attempted}")
+    console.print(f"  Forge succeeded:  {result.forge_succeeded}")
+
+    if result.new_skills:
+        console.print()
+        table = Table(title="New Skills Forged")
+        table.add_column("Name", style="cyan")
+        table.add_column("Confidence", justify="right")
+        table.add_column("Pass Rate", justify="right")
+
+        for skill in result.new_skills:
+            table.add_row(
+                skill.name,
+                f"{skill.confidence_score:.2f}",
+                f"{skill.pass_rate:.2f}",
+            )
+
+        console.print(table)
+    elif result.candidates_found == 0:
+        console.print("\n[dim]No patterns found. Run more extractions first.[/dim]")
+    else:
+        console.print("\n[dim]No new skills forged this cycle.[/dim]")
+
+
+async def _run_evolve(
+    cfg: EvoSysConfig, min_frequency: int
+) -> EvolveCycleResult:
+    from evosys.forge.forge import SkillForge
+    from evosys.forge.synthesizer import SkillSynthesizer
+    from evosys.loop import EvolutionLoop
+
+    runtime = await bootstrap(cfg)
+    try:
+        synthesizer = SkillSynthesizer(runtime.llm)
+        forge = SkillForge(synthesizer, runtime.skill_registry)
+        loop = EvolutionLoop(
+            runtime.trajectory_store,
+            forge,
+            runtime.skill_registry,
+            min_frequency=min_frequency,
+        )
+        return await loop.run_cycle()
     finally:
         await runtime.shutdown()
 

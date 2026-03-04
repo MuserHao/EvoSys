@@ -49,3 +49,14 @@ class TestReflect:
         )
         assert result.exit_code == 0
         assert "No patterns found" in result.output
+
+
+class TestEvolve:
+    def test_empty_db_shows_no_patterns(self):
+        result = runner.invoke(
+            app,
+            ["evolve", "--db", "sqlite+aiosqlite:///:memory:"],
+        )
+        assert result.exit_code == 0
+        assert "Patterns found" in result.output
+        assert "0" in result.output

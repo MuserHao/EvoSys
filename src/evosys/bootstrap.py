@@ -10,7 +10,10 @@ from evosys.agents.extraction_agent import ExtractionAgent
 from evosys.config import EvoSysConfig
 from evosys.executors.http_executor import HttpExecutor
 from evosys.executors.skill_executor import SkillExecutor
+from evosys.forge.forge import SkillForge
+from evosys.forge.synthesizer import SkillSynthesizer
 from evosys.llm.client import LLMClient
+from evosys.loop import EvolutionLoop
 from evosys.orchestration.routing_orchestrator import RoutingOrchestrator
 from evosys.skills.loader import register_builtin_skills
 from evosys.skills.registry import SkillRegistry
@@ -34,6 +37,9 @@ class EvoSysRuntime:
     skill_executor: SkillExecutor
     routing_orchestrator: RoutingOrchestrator
     agent: ExtractionAgent
+    synthesizer: SkillSynthesizer
+    forge: SkillForge
+    evolution_loop: EvolutionLoop
 
     async def shutdown(self) -> None:
         """Dispose of the database engine."""
@@ -84,6 +90,12 @@ async def bootstrap(
         skill_executor=skill_executor,
     )
 
+    synthesizer = SkillSynthesizer(llm)
+    forge = SkillForge(synthesizer, skill_registry)
+    evolution_loop = EvolutionLoop(
+        trajectory_store, forge, skill_registry
+    )
+
     return EvoSysRuntime(
         config=cfg,
         engine=engine,
@@ -96,4 +108,7 @@ async def bootstrap(
         skill_executor=skill_executor,
         routing_orchestrator=routing_orchestrator,
         agent=agent,
+        synthesizer=synthesizer,
+        forge=forge,
+        evolution_loop=evolution_loop,
     )
