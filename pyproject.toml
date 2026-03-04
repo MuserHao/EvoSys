@@ -7,7 +7,6 @@ dependencies = [
     # Schemas & serialization
     "pydantic>=2.0",
     "orjson>=3.9",
-    "msgpack>=1.0",
     "python-ulid>=2.0",
 
     # Async & networking
@@ -17,38 +16,19 @@ dependencies = [
     # Structured logging
     "structlog>=24.0",
 
-    # Graph & DAG
-    "networkx>=3.0",
-
-    # Retry & scheduling
-    "tenacity>=8.0",
-    "apscheduler>=3.10",
-
-    # LLM providers
+    # LLM — litellm handles all provider translation (Anthropic, OpenAI, etc.)
+    # anthropic/openai/tiktoken are litellm sub-deps; not imported directly.
     "litellm>=1.40",
-    "anthropic>=0.30",
-    "openai>=1.30",
-    "tiktoken>=0.7",
 
     # Database
     "sqlalchemy>=2.0",
+    # greenlet is a SQLAlchemy async runtime requirement, not imported directly
     "greenlet>=3.0",
-    "alembic>=1.13",
     "aiosqlite>=0.20",
 
-    # Vector DB
-    "lancedb>=0.6",
-
-    # ML / embeddings
-    "torch>=2.2",
-    "sentence-transformers>=3.0",
-
-    # Web / dashboard
+    # Web server
     "fastapi>=0.111",
     "uvicorn[standard]>=0.30",
-
-    # Sandbox
-    "docker>=7.0",
 
     # CLI
     "typer>=0.12",
@@ -61,30 +41,90 @@ dev = [
     "pyright>=1.1",
     "pytest>=8.0",
     "pytest-asyncio>=0.23",
+    "httpx>=0.27",   # needed by httpx.ASGITransport in server tests
 ]
-reflection = [
+
+# Install with: uv sync --group migrations
+# Used when running schema migrations in production (alembic upgrade head).
+# Not needed for development against SQLite with create_all().
+migrations = [
+    "alembic>=1.13",
+]
+
+# Install with: uv sync --group forge-sandbox
+# Safer subprocess sandbox for exec() in SkillForge.
+# RestrictedPython replaces the current bare exec() approach.
+# jsonschema validates forged skill I/O schemas at registration time.
+# genson infers JSON schemas from sample data (replaces _infer_schema heuristic).
+forge-sandbox = [
+    "RestrictedPython>=7.0",
+    "jsonschema>=4.22",
+    "genson>=1.3",
+]
+
+# Install with: uv sync --group skill-clustering
+# Semantic clustering of trajectory patterns using embeddings instead of
+# exact-domain matching. Replaces PatternDetector's frequency-count approach
+# with HDBSCAN clustering over sentence embeddings.
+# sentence-transformers pulls torch; keep separate to avoid forcing GPU deps
+# on every install.
+skill-clustering = [
+    "sentence-transformers>=3.0",
     "scikit-learn>=1.4",
     "hdbscan>=0.8",
     "scipy>=1.12",
 ]
-training = [
+
+# Install with: uv sync --group skill-scheduling
+# Cron-style evolution scheduling (replaces asyncio.sleep loop in server.py).
+# tenacity for LLM call retries with exponential backoff.
+skill-scheduling = [
+    "apscheduler>=3.10",
+    "tenacity>=8.0",
+]
+
+# Install with: uv sync --group skill-search
+# Vector similarity search for skill lookup — finds the closest skill to a
+# task even when no exact domain match exists.
+skill-search = [
+    "lancedb>=0.6",
+]
+
+# Install with: uv sync --group skill-graphs
+# DAG-based skill dependency and composition graphs.
+# Python stdlib graphlib covers topological sort for simple chains;
+# networkx is only needed for complex graph algorithms (centrality, cycle
+# detection across large skill webs).
+skill-graphs = [
+    "networkx>=3.0",
+]
+
+# Install with: uv sync --group forge-sandbox-docker
+# Docker-based subprocess isolation for SkillForge exec() — the strongest
+# available sandbox. Requires a running Docker daemon.
+forge-sandbox-docker = [
+    "docker>=7.0",
+]
+
+# Install with: uv sync --group nlp
+# Richer deterministic skill library: spacy NER, lxml fast HTML parsing,
+# dateutil for temporal extraction, ftfy for encoding repair.
+nlp = [
+    "spacy>=3.7",
+    "lxml>=5.0",
+    "python-dateutil>=2.9",
+    "ftfy>=6.0",
+]
+
+# Install with: uv sync --group fine-tuning
+# Fine-tuning pipeline for promoting Tier 4 (cloud LLM) skills to
+# Tier 3 (local fine-tuned model). Not part of the core evolution loop.
+fine-tuning = [
     "transformers>=4.40",
     "peft>=0.11",
     "datasets>=2.19",
     "trl>=0.8",
     "llama-cpp-python>=0.2",
-]
-nlp = [
-    "spacy>=3.7",
-    "regex>=2024.0",
-    "lxml>=5.0",
-    "python-dateutil>=2.9",
-    "ftfy>=6.0",
-]
-forge = [
-    "RestrictedPython>=7.0",
-    "jsonschema>=4.22",
-    "genson>=1.3",
 ]
 
 [project.scripts]

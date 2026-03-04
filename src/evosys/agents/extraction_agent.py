@@ -132,7 +132,10 @@ class ExtractionAgent:
         prompt = system_prompt or _DEFAULT_SYSTEM_PROMPT
 
         fetch_action = plan_actions[0]
-        extract_action = plan_actions[1]
+        # extract_action carries the reasoning label used in trajectory logging.
+        # ExtractionOrchestrator always returns [fetch_url, llm_extract], but
+        # guard against shorter plans from other orchestrators.
+        extract_action = plan_actions[1] if len(plan_actions) > 1 else fetch_action
 
         # --- Fetch ---
         fetch_with_params = Action(

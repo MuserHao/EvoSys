@@ -56,12 +56,14 @@ class Agent:
         *,
         max_iterations: int = 20,
         system_prompt: str | None = None,
+        timeout_s: float | None = None,
     ) -> None:
         self._llm = llm
         self._tool_registry = tool_registry
         self._logger = trajectory_logger
         self._max_iterations = max_iterations
         self._system_prompt = system_prompt or _DEFAULT_SYSTEM_PROMPT
+        self._timeout_s = timeout_s
 
     async def run(
         self,
@@ -69,7 +71,25 @@ class Agent:
         *,
         context: dict[str, object] | None = None,
     ) -> AgentResult:
-        """Execute the agent loop for *task* and return the result."""
+        """Execute the agent loop for *task* and return the result.
+
+        Raises ``TimeoutError`` if the run exceeds ``timeout_s`` (when set).
+        """
+        import asyncio as _asyncio
+
+        if self._timeout_s is not None:
+            return await _asyncio.wait_for(
+                self._run(task, context=context), timeout=self._timeout_s
+            )
+        return await self._run(task, context=context)
+
+    async def _run(
+        self,
+        task: str,
+        *,
+        context: dict[str, object] | None = None,
+    ) -> AgentResult:
+        """Internal loop — called by run() with optional timeout wrapper."""
         t0 = time.monotonic()
         session_id = str(new_ulid())
         all_tool_calls: list[ToolCall] = []

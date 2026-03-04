@@ -62,6 +62,7 @@ class EvolutionLoop:
         composite_forge: CompositeForge | None = None,
         sequence_detector: SequenceDetector | None = None,
         shadow_degradation_threshold: float = 0.5,
+        max_forge_per_cycle: int = 5,
     ) -> None:
         self._store = store
         self._forge = forge
@@ -76,6 +77,9 @@ class EvolutionLoop:
         # Skills with shadow_agreement_rate below this threshold are marked
         # DEGRADED so the routing layer stops sending traffic to them.
         self._shadow_degradation_threshold = shadow_degradation_threshold
+        # Cap LLM synthesis calls per cycle to bound API cost.
+        # Patterns above the cap are deferred to the next cycle.
+        self._max_forge_per_cycle = max_forge_per_cycle
 
     async def run_cycle(self) -> EvolveCycleResult:
         """Execute one evolution cycle and return a summary."""
@@ -93,6 +97,14 @@ class EvolutionLoop:
         new_skills: list[SkillRecord] = []
 
         for pattern in patterns:
+            if forge_attempted >= self._max_forge_per_cycle:
+                log.info(
+                    "evolve.cycle_cap_reached",
+                    cap=self._max_forge_per_cycle,
+                    remaining=len(patterns) - already_covered - forge_attempted,
+                )
+                break
+
             skill_name = f"extract:{pattern.domain}"
 
             if skill_name in self._registry:

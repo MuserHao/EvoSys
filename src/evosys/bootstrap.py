@@ -165,6 +165,7 @@ async def bootstrap(
         trajectory_logger=agent_logger,
         max_iterations=cfg.agent_max_iterations,
         system_prompt=cfg.agent_system_prompt,
+        timeout_s=cfg.agent_timeout_s,
     )
 
     return EvoSysRuntime(

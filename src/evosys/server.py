@@ -17,13 +17,11 @@ from contextlib import asynccontextmanager
 from typing import Any
 
 import structlog
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
 from evosys.bootstrap import EvoSysRuntime, bootstrap
 from evosys.config import EvoSysConfig
-from evosys.forge.forge import SkillForge
-from evosys.forge.synthesizer import SkillSynthesizer
 from evosys.loop import EvolutionLoop, EvolveCycleResult
 
 log = structlog.get_logger()
@@ -146,13 +144,10 @@ async def lifespan(app: FastAPI):
     cfg = EvoSysConfig.from_env()
     _runtime = await bootstrap(cfg)
 
-    synthesizer = SkillSynthesizer(_runtime.llm)
-    forge = SkillForge(synthesizer, _runtime.skill_registry)
-    _evolution_loop = EvolutionLoop(
-        _runtime.trajectory_store,
-        forge,
-        _runtime.skill_registry,
-    )
+    # Reuse the EvolutionLoop already wired in bootstrap so there is only
+    # ever one loop instance sharing the registry — avoids "already registered"
+    # races when the background worker and POST /evolve run concurrently.
+    _evolution_loop = _runtime.evolution_loop
 
     # Start background evolution (every 5 minutes)
     _evolution_task = asyncio.create_task(
@@ -191,16 +186,33 @@ app = FastAPI(
 )
 
 
+def _require_runtime() -> EvoSysRuntime:
+    """Return the runtime or raise 503 if not yet initialised."""
+    if _runtime is None:
+        raise HTTPException(status_code=503, detail="Server is still starting up.")
+    return _runtime
+
+
+def _require_evolution_loop() -> EvolutionLoop:
+    if _evolution_loop is None:
+        raise HTTPException(status_code=503, detail="Evolution loop not initialised.")
+    return _evolution_loop
+
+
 @app.post("/extract", response_model=ExtractResponse)
 async def extract(req: ExtractRequest) -> ExtractResponse:
     """Extract structured data from a URL."""
-    assert _runtime is not None, "Runtime not initialised"
+    from evosys.agents.extraction_agent import ExtractionError
 
-    result = await _runtime.extraction_agent.extract(
-        url=req.url,
-        target_schema=req.schema_description,
-        system_prompt=req.system_prompt,
-    )
+    rt = _require_runtime()
+    try:
+        result = await rt.extraction_agent.extract(
+            url=req.url,
+            target_schema=req.schema_description,
+            system_prompt=req.system_prompt,
+        )
+    except ExtractionError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
 
     return ExtractResponse(
         data=dict(result.data),
@@ -215,13 +227,11 @@ async def extract(req: ExtractRequest) -> ExtractResponse:
 @app.post("/agent/run", response_model=AgentRunResponse)
 async def agent_run(req: AgentRunRequest) -> AgentRunResponse:
     """Run the general-purpose agent on a task."""
-    assert _runtime is not None, "Runtime not initialised"
-
-    result = await _runtime.general_agent.run(
+    rt = _require_runtime()
+    result = await rt.general_agent.run(
         task=req.task,
         context=req.context,
     )
-
     return AgentRunResponse(
         answer=result.answer,
         total_tokens=result.total_tokens,
@@ -235,16 +245,15 @@ async def agent_run(req: AgentRunRequest) -> AgentRunResponse:
 @app.get("/skills", response_model=list[SkillInfo])
 async def list_skills() -> list[SkillInfo]:
     """List all registered skills."""
-    assert _runtime is not None, "Runtime not initialised"
-
-    entries = _runtime.skill_registry.list_all()
+    rt = _require_runtime()
+    entries = rt.skill_registry.list_all()
     return [
         SkillInfo(
             name=e.record.name,
             status=e.record.status.value,
             confidence_score=e.record.confidence_score,
             implementation_type=e.record.implementation_type.value,
-            invocation_count=e.record.invocation_count,
+            invocation_count=e.invocation_count,  # live counter on SkillEntry
             description=e.record.description,
         )
         for e in sorted(entries, key=lambda e: e.record.name)
@@ -254,7 +263,7 @@ async def list_skills() -> list[SkillInfo]:
 @app.get("/status", response_model=StatusResponse)
 async def status() -> StatusResponse:
     """System health and evolution metrics."""
-    assert _runtime is not None, "Runtime not initialised"
+    rt = _require_runtime()
 
     from evosys import __version__
 
@@ -269,8 +278,8 @@ async def status() -> StatusResponse:
 
     return StatusResponse(
         version=__version__,
-        total_skills=len(_runtime.skill_registry),
-        active_skills=len(_runtime.skill_registry.list_active()),
+        total_skills=len(rt.skill_registry),
+        active_skills=len(rt.skill_registry.list_active()),
         total_evolve_cycles=_total_evolve_cycles,
         total_skills_forged=_total_skills_forged,
         last_evolve_result=last,
@@ -280,11 +289,11 @@ async def status() -> StatusResponse:
 @app.post("/evolve")
 async def trigger_evolve() -> dict[str, Any]:
     """Manually trigger an evolution cycle."""
-    assert _evolution_loop is not None, "Evolution loop not initialised"
+    loop = _require_evolution_loop()
 
     global _last_evolve_result, _total_evolve_cycles, _total_skills_forged
 
-    result = await _evolution_loop.run_cycle()
+    result = await loop.run_cycle()
     _last_evolve_result = result
     _total_evolve_cycles += 1
     _total_skills_forged += result.forge_succeeded
