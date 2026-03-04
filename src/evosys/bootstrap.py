@@ -22,7 +22,15 @@ from evosys.skills.loader import register_builtin_skills
 from evosys.skills.registry import SkillRegistry
 from evosys.storage.engine import dispose_engine, init_engine, make_session_factory
 from evosys.storage.trajectory_store import TrajectoryStore
-from evosys.tools.builtins import ExtractStructuredTool, WebFetchTool
+from evosys.tools.builtins import (
+    ExtractStructuredTool,
+    FileListTool,
+    FileReadTool,
+    FileWriteTool,
+    PythonEvalTool,
+    ShellExecTool,
+    WebFetchTool,
+)
 from evosys.tools.mcp import MCPManager, MCPServerConfig
 from evosys.tools.registry import ToolRegistry
 from evosys.trajectory.logger import TrajectoryLogger
@@ -121,6 +129,11 @@ async def bootstrap(
     extract_tool = ExtractStructuredTool(extraction_agent)
     tool_registry.register_external(web_fetch_tool)
     tool_registry.register_external(extract_tool)
+    tool_registry.register_external(ShellExecTool())
+    tool_registry.register_external(FileReadTool())
+    tool_registry.register_external(FileWriteTool())
+    tool_registry.register_external(FileListTool())
+    tool_registry.register_external(PythonEvalTool())
 
     # MCP integration
     mcp_manager = MCPManager()
