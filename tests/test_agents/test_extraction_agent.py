@@ -8,9 +8,15 @@ import pytest
 from ulid import ULID
 
 from evosys.agents.extraction_agent import ExtractionAgent, ExtractionError, ExtractionResult
+from evosys.core.interfaces import BaseSkill
 from evosys.core.types import Observation
 from evosys.executors.http_executor import HttpExecutor
+from evosys.executors.skill_executor import SkillExecutor
 from evosys.llm.client import LLMClient, LLMError, LLMResponse
+from evosys.orchestration.routing_orchestrator import RoutingOrchestrator
+from evosys.schemas._types import ImplementationType
+from evosys.schemas.skill import SkillRecord
+from evosys.skills.registry import SkillRegistry
 from evosys.trajectory.logger import TrajectoryLogger
 
 
@@ -169,3 +175,112 @@ class TestTrajectoryLogging:
             await agent.extract(url="https://example.com", target_schema="{}")
         # Both fetch and failed extract should be logged
         assert mock_logger._iteration == 2
+
+
+# ---------------------------------------------------------------------------
+# Skill routing tests (Phase 1b)
+# ---------------------------------------------------------------------------
+
+
+class _StubSkill(BaseSkill):
+    async def invoke(self, input_data: dict[str, object]) -> dict[str, object]:
+        return {"extracted": True, "source": str(input_data.get("url", ""))}
+
+    def validate(self) -> bool:
+        return True
+
+
+def _make_skill_record(name: str = "extract:example.com") -> SkillRecord:
+    return SkillRecord(
+        name=name,
+        description="Stub skill",
+        implementation_type=ImplementationType.DETERMINISTIC,
+        implementation_path="skills/stub.py",
+        test_suite_path="tests/test_stub.py",
+        confidence_score=0.9,
+    )
+
+
+class TestSkillRouting:
+    async def test_skill_routing_returns_result_with_skill_used(
+        self,
+        mock_llm: LLMClient,
+        mock_http: HttpExecutor,
+        mock_logger: TrajectoryLogger,
+    ):
+        reg = SkillRegistry()
+        reg.register(_make_skill_record(), _StubSkill())
+        routing_orch = RoutingOrchestrator(reg)
+        skill_exec = SkillExecutor(reg)
+
+        agent = ExtractionAgent(
+            mock_llm, mock_http, mock_logger,
+            orchestrator=routing_orch,
+            skill_executor=skill_exec,
+        )
+        result = await agent.extract(
+            url="https://example.com/page",
+            target_schema="{}",
+        )
+        assert isinstance(result, ExtractionResult)
+        assert result.skill_used == "extract:example.com"
+        assert result.data["extracted"] is True
+        assert result.token_cost == 0
+
+    async def test_falls_back_to_llm_when_no_skill(
+        self,
+        mock_llm: LLMClient,
+        mock_http: HttpExecutor,
+        mock_logger: TrajectoryLogger,
+    ):
+        reg = SkillRegistry()  # empty registry
+        routing_orch = RoutingOrchestrator(reg)
+        skill_exec = SkillExecutor(reg)
+
+        agent = ExtractionAgent(
+            mock_llm, mock_http, mock_logger,
+            orchestrator=routing_orch,
+            skill_executor=skill_exec,
+        )
+        result = await agent.extract(
+            url="https://example.com/page",
+            target_schema='{"name": "string"}',
+        )
+        assert isinstance(result, ExtractionResult)
+        assert result.skill_used is None
+        assert result.data == {"name": "Test"}
+
+    async def test_skill_path_logs_one_trajectory(
+        self,
+        mock_llm: LLMClient,
+        mock_http: HttpExecutor,
+        mock_logger: TrajectoryLogger,
+    ):
+        reg = SkillRegistry()
+        reg.register(_make_skill_record(), _StubSkill())
+        routing_orch = RoutingOrchestrator(reg)
+        skill_exec = SkillExecutor(reg)
+
+        agent = ExtractionAgent(
+            mock_llm, mock_http, mock_logger,
+            orchestrator=routing_orch,
+            skill_executor=skill_exec,
+        )
+        await agent.extract(url="https://example.com/page", target_schema="{}")
+        assert mock_logger._iteration == 1
+
+    async def test_backward_compat_no_skill_executor_uses_llm(
+        self,
+        mock_llm: LLMClient,
+        mock_http: HttpExecutor,
+        mock_logger: TrajectoryLogger,
+    ):
+        """Without skill_executor, agent behaves identically to Phase 1a."""
+        agent = ExtractionAgent(mock_llm, mock_http, mock_logger)
+        result = await agent.extract(
+            url="https://example.com",
+            target_schema='{"name": "string"}',
+        )
+        assert isinstance(result, ExtractionResult)
+        assert result.skill_used is None
+        assert result.data == {"name": "Test"}

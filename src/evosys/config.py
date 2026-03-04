@@ -16,6 +16,7 @@ class EvoSysConfig:
     llm_max_tokens: int = 4096
     http_timeout_s: float = 30.0
     http_max_body_bytes: int = 5_000_000
+    skill_confidence_threshold: float = 0.7
 
     @classmethod
     def from_env(cls) -> EvoSysConfig:
@@ -33,4 +34,6 @@ class EvoSysConfig:
             kwargs["http_timeout_s"] = float(v)
         if v := os.environ.get("EVOSYS_HTTP_MAX_BODY_BYTES"):
             kwargs["http_max_body_bytes"] = int(v)
+        if v := os.environ.get("EVOSYS_SKILL_CONFIDENCE_THRESHOLD"):
+            kwargs["skill_confidence_threshold"] = float(v)
         return cls(**kwargs)  # type: ignore[arg-type]

@@ -2,10 +2,11 @@
 
 from evosys.agents import ExtractionAgent, ExtractionError, ExtractionResult
 from evosys.config import EvoSysConfig
-from evosys.executors import HttpExecutor
+from evosys.executors import HttpExecutor, SkillExecutor
 from evosys.llm import LLMClient, LLMError, LLMResponse
-from evosys.orchestration import ExtractionOrchestrator
+from evosys.orchestration import ExtractionOrchestrator, RoutingOrchestrator
 from evosys.schemas import SkillRecord, SliceCandidate, TrajectoryRecord
+from evosys.skills import SkillEntry, SkillRegistry
 from evosys.storage import TrajectoryStore, init_engine, make_session_factory
 from evosys.trajectory import TrajectoryLogger
 
@@ -21,7 +22,11 @@ __all__ = [
     "LLMClient",
     "LLMError",
     "LLMResponse",
+    "RoutingOrchestrator",
+    "SkillEntry",
+    "SkillExecutor",
     "SkillRecord",
+    "SkillRegistry",
     "SliceCandidate",
     "TrajectoryLogger",
     "TrajectoryRecord",
