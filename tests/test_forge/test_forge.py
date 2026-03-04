@@ -126,3 +126,92 @@ class TestForge:
         assert result is not None
         assert result.name == "extract:example.com"
         assert "extract:example.com" in reg
+
+
+class TestForgeWithIOPairs:
+    """Tests that exercise the full async compile→invoke pipeline.
+
+    These catch the class of bug where synthesized code is called incorrectly
+    (e.g. run_until_complete inside an already-running loop).
+    """
+
+    def _candidate_with_pairs(self) -> tuple[SliceCandidate, list]:
+        from evosys.core.types import IOPair
+
+        tid = new_ulid()
+        candidate = SliceCandidate(
+            action_sequence=["llm_extract"],
+            frequency=3,
+            occurrence_trace_ids=[tid] * 3,
+            boundary_confidence=0.8,
+        )
+        pairs = [
+            IOPair(
+                input_data={"html": "<h1>Hello</h1>", "url": "https://ex.com"},
+                output_data={"title": "hello"},
+            ),
+            IOPair(
+                input_data={"html": "<h1>World</h1>", "url": "https://ex.com"},
+                output_data={"title": "world"},
+            ),
+        ]
+        return candidate, pairs
+
+    async def test_passes_with_matching_io(self):
+        """Forge succeeds when synthesized code passes the I/O pairs."""
+        code = (
+            "import re\n"
+            "async def extract(input_data):\n"
+            "    m = re.search(r'<h1>(.*?)</h1>', input_data.get('html', ''))\n"
+            "    return {'title': m.group(1).lower() if m else ''}\n"
+        )
+        candidate, pairs = self._candidate_with_pairs()
+        synth = _mock_synthesizer(code)
+        reg = SkillRegistry()
+        forge = SkillForge(synth, reg)
+
+        result = await forge.forge(candidate, domain="ex.com", sample_io=pairs)
+
+        assert result is not None
+        assert result.pass_rate == 1.0
+        entry = reg.lookup("extract:ex.com")
+        assert entry is not None
+        # The forged skill must actually run correctly via await
+        output = await entry.implementation.invoke(
+            {"html": "<h1>Test</h1>", "url": "https://ex.com"}
+        )
+        assert output["title"] == "test"
+
+    async def test_fails_below_pass_rate(self):
+        """Forge returns None when synthesized code fails too many I/O pairs."""
+        code = (
+            "async def extract(input_data):\n"
+            "    return {'title': 'always_wrong'}\n"
+        )
+        candidate, pairs = self._candidate_with_pairs()
+        synth = _mock_synthesizer(code)
+        reg = SkillRegistry()
+        forge = SkillForge(synth, reg, min_pass_rate=0.8)
+
+        result = await forge.forge(candidate, domain="ex.com", sample_io=pairs)
+
+        assert result is None
+        assert "extract:ex.com" not in reg
+
+    async def test_partial_pass_rate_recorded(self):
+        """When pass rate is above threshold, it is recorded on the record."""
+        # One pair matches, one doesn't → 50% pass rate
+        code = (
+            "async def extract(input_data):\n"
+            "    html = input_data.get('html', '')\n"
+            "    return {'title': 'hello'} if 'Hello' in html else {'title': 'nope'}\n"
+        )
+        candidate, pairs = self._candidate_with_pairs()
+        synth = _mock_synthesizer(code)
+        reg = SkillRegistry()
+        forge = SkillForge(synth, reg, min_pass_rate=0.4)
+
+        result = await forge.forge(candidate, domain="partial.com", sample_io=pairs)
+
+        assert result is not None
+        assert result.pass_rate == 0.5
