@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+from datetime import datetime
+
 import orjson
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from ulid import ULID
 
@@ -47,6 +49,77 @@ class TrajectoryStore:
             )
             result = await session.execute(stmt)
             return [self._from_row(row) for row in result.scalars().all()]
+
+    async def get_recent(
+        self,
+        *,
+        since: datetime,
+        limit: int = 1000,
+    ) -> list[TrajectoryRecord]:
+        """Retrieve records newer than *since*, ordered by timestamp."""
+        async with self._session_factory() as session:
+            stmt = (
+                select(TrajectoryRow)
+                .where(TrajectoryRow.timestamp_utc >= since)
+                .order_by(TrajectoryRow.timestamp_utc)
+                .limit(limit)
+            )
+            result = await session.execute(stmt)
+            return [self._from_row(row) for row in result.scalars().all()]
+
+    async def get_by_action_name(
+        self, action_name: str, *, limit: int = 1000
+    ) -> list[TrajectoryRecord]:
+        """Retrieve records with the given *action_name*."""
+        async with self._session_factory() as session:
+            stmt = (
+                select(TrajectoryRow)
+                .where(TrajectoryRow.action_name == action_name)
+                .order_by(TrajectoryRow.timestamp_utc.desc())
+                .limit(limit)
+            )
+            result = await session.execute(stmt)
+            return [self._from_row(row) for row in result.scalars().all()]
+
+    async def count_by_action_name(self) -> dict[str, int]:
+        """Return {action_name: count} for all records."""
+        async with self._session_factory() as session:
+            stmt = select(
+                TrajectoryRow.action_name,
+                func.count(TrajectoryRow.trace_id),
+            ).group_by(TrajectoryRow.action_name)
+            result = await session.execute(stmt)
+            return {name: count for name, count in result.all()}
+
+    async def get_llm_extractions_by_domain(
+        self, *, limit: int = 1000
+    ) -> dict[str, list[TrajectoryRecord]]:
+        """Group LLM extraction records by domain extracted from context.
+
+        Returns {domain: [records]} for ``llm_extract`` actions where
+        the context summary contains a URL-like domain.
+        """
+        async with self._session_factory() as session:
+            stmt = (
+                select(TrajectoryRow)
+                .where(TrajectoryRow.action_name == "llm_extract")
+                .where(TrajectoryRow.skill_used.is_(None))
+                .order_by(TrajectoryRow.timestamp_utc.desc())
+                .limit(limit)
+            )
+            result = await session.execute(stmt)
+            rows = result.scalars().all()
+
+        import re
+
+        url_re = re.compile(r"https?://(?:www\.)?([^/\s]+)")
+        by_domain: dict[str, list[TrajectoryRecord]] = {}
+        for row in rows:
+            m = url_re.search(row.context_summary)
+            if m:
+                domain = m.group(1)
+                by_domain.setdefault(domain, []).append(self._from_row(row))
+        return by_domain
 
     @staticmethod
     def _to_row(record: TrajectoryRecord) -> TrajectoryRow:
