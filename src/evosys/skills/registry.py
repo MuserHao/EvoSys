@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 
 from evosys.core.interfaces import BaseSkill
@@ -12,10 +12,17 @@ from evosys.schemas.skill import SkillRecord
 
 @dataclass(slots=True)
 class SkillEntry:
-    """A registry entry pairing a :class:`SkillRecord` with its implementation."""
+    """A registry entry pairing a :class:`SkillRecord` with its implementation.
+
+    Mutable counters (``invocation_count``, ``last_invoked``) are tracked
+    here rather than on the immutable :class:`SkillRecord` so that callers
+    holding a reference to the record always see a consistent snapshot.
+    """
 
     record: SkillRecord
     implementation: BaseSkill
+    invocation_count: int = field(default=0)
+    last_invoked: datetime | None = field(default=None)
 
 
 class SkillRegistry:
@@ -90,19 +97,15 @@ class SkillRegistry:
     ) -> None:
         """Increment invocation count and set last_invoked.
 
-        No-op if *name* is not registered.
+        Counters live on :class:`SkillEntry` so the immutable
+        :class:`SkillRecord` is never copied.  No-op if *name* is not
+        registered.
         """
         entry = self._entries.get(name)
         if entry is None:
             return
-        ts = timestamp or utc_now()
-        # SkillRecord is a Pydantic model — rebuild with updated fields.
-        entry.record = entry.record.model_copy(
-            update={
-                "invocation_count": entry.record.invocation_count + 1,
-                "last_invoked": ts,
-            }
-        )
+        entry.invocation_count += 1
+        entry.last_invoked = timestamp or utc_now()
 
     def __len__(self) -> int:
         return len(self._entries)

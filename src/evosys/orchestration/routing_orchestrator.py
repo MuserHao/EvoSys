@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from urllib.parse import urlparse
 
 from evosys.core.interfaces import BaseOrchestrator
 from evosys.core.types import Action, ActionPlan
@@ -64,13 +65,19 @@ class RoutingOrchestrator(BaseOrchestrator):
 
     @staticmethod
     def _extract_domain(url: str) -> str | None:
-        """Return the domain from *url* with ``www.`` stripped, or ``None``."""
-        # Minimal parser: skip scheme, grab host
+        """Return the normalised hostname from *url* with ``www.`` stripped.
+
+        Uses :mod:`urllib.parse` for correct handling of ports, IP addresses,
+        and edge cases.  Returns ``None`` if the URL cannot be parsed or has
+        no hostname.
+        """
         try:
-            after_scheme = url.split("://", 1)[1]
-            host = after_scheme.split("/", 1)[0].split(":", 1)[0]
+            parsed = urlparse(url)
+            host = parsed.hostname  # already lower-cased and port-stripped
+            if not host:
+                return None
             if host.startswith("www."):
                 host = host[4:]
             return host or None
-        except (IndexError, ValueError):
+        except ValueError:
             return None

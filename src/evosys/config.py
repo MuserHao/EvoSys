@@ -25,6 +25,10 @@ class EvoSysConfig:
         "answer, respond directly without calling more tools."
     )
     mcp_servers: str = "[]"
+    # Opt-in flags for tools that can execute arbitrary code or shell commands.
+    # Disabled by default to avoid accidental destructive operations.
+    enable_shell_tool: bool = False
+    enable_python_eval_tool: bool = False
 
     @classmethod
     def from_env(cls) -> EvoSysConfig:
@@ -50,4 +54,8 @@ class EvoSysConfig:
             kwargs["agent_system_prompt"] = v
         if v := os.environ.get("EVOSYS_MCP_SERVERS"):
             kwargs["mcp_servers"] = v
+        if v := os.environ.get("EVOSYS_ENABLE_SHELL_TOOL"):
+            kwargs["enable_shell_tool"] = v.lower() in {"1", "true", "yes"}
+        if v := os.environ.get("EVOSYS_ENABLE_PYTHON_EVAL_TOOL"):
+            kwargs["enable_python_eval_tool"] = v.lower() in {"1", "true", "yes"}
         return cls(**kwargs)  # type: ignore[arg-type]

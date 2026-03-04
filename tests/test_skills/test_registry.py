@@ -153,7 +153,7 @@ class TestRecordInvocation:
         reg.record_invocation("extract:example.com")
         entry = reg.lookup("extract:example.com")
         assert entry is not None
-        assert entry.record.invocation_count == 1
+        assert entry.invocation_count == 1
 
     def test_sets_last_invoked(self):
         reg = SkillRegistry()
@@ -162,7 +162,7 @@ class TestRecordInvocation:
         reg.record_invocation("extract:example.com", timestamp=ts)
         entry = reg.lookup("extract:example.com")
         assert entry is not None
-        assert entry.record.last_invoked == ts
+        assert entry.last_invoked == ts
 
     def test_increments_multiple_times(self):
         reg = SkillRegistry()
@@ -172,11 +172,30 @@ class TestRecordInvocation:
         reg.record_invocation("extract:example.com")
         entry = reg.lookup("extract:example.com")
         assert entry is not None
-        assert entry.record.invocation_count == 3
+        assert entry.invocation_count == 3
 
     def test_noop_if_missing(self):
         reg = SkillRegistry()
         reg.record_invocation("nonexistent")  # should not raise
+
+    def test_record_identity_unchanged(self):
+        """Invoking the skill must not replace the SkillRecord object.
+
+        Callers that hold a reference to entry.record before the invocation
+        should still see a valid record (the object identity is preserved).
+        """
+        reg = SkillRegistry()
+        reg.register(_make_record(), _StubSkill())
+        entry = reg.lookup("extract:example.com")
+        assert entry is not None
+        record_before = entry.record
+
+        reg.record_invocation("extract:example.com")
+
+        # The record object itself must not have been replaced
+        assert entry.record is record_before
+        # But the counter on the entry is updated
+        assert entry.invocation_count == 1
 
 
 class TestDunderMethods:

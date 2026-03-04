@@ -129,11 +129,17 @@ async def bootstrap(
     extract_tool = ExtractStructuredTool(extraction_agent)
     tool_registry.register_external(web_fetch_tool)
     tool_registry.register_external(extract_tool)
-    tool_registry.register_external(ShellExecTool())
     tool_registry.register_external(FileReadTool())
     tool_registry.register_external(FileWriteTool())
     tool_registry.register_external(FileListTool())
-    tool_registry.register_external(PythonEvalTool())
+    # ShellExecTool and PythonEvalTool execute arbitrary code/commands — only
+    # register them when explicitly opted-in via config or env var.
+    if cfg.enable_shell_tool:
+        tool_registry.register_external(ShellExecTool())
+        log.info("bootstrap.shell_tool_enabled")
+    if cfg.enable_python_eval_tool:
+        tool_registry.register_external(PythonEvalTool())
+        log.info("bootstrap.python_eval_tool_enabled")
 
     # MCP integration
     mcp_manager = MCPManager()

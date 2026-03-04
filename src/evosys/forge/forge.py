@@ -103,11 +103,7 @@ class SkillForge(BaseForge):
         pass_count = 0
         for pair in io_pairs:
             try:
-                import asyncio
-
-                result = asyncio.get_event_loop().run_until_complete(
-                    extract_fn(dict(pair.input_data))
-                )
+                result = await extract_fn(dict(pair.input_data))
                 if _outputs_match(result, dict(pair.output_data)):
                     pass_count += 1
             except Exception:
@@ -167,16 +163,18 @@ def _is_safe_code(code: str) -> bool:
     """Check if synthesized code is safe to execute.
 
     Rejects code that:
-    - Imports os, sys, subprocess, shutil, or pathlib
-    - Uses exec(), eval(), compile(), __import__()
-    - Contains file operations (open())
+    - Imports os, sys, subprocess, shutil, pathlib, socket, or importlib
+    - Uses exec(), eval(), compile(), __import__(), open()
+    - Accesses dangerous modules via attribute access (e.g. os.system)
     """
     try:
         tree = ast.parse(code)
     except SyntaxError:
         return False
 
-    dangerous_modules = {"os", "sys", "subprocess", "shutil", "pathlib", "socket"}
+    dangerous_modules = {
+        "os", "sys", "subprocess", "shutil", "pathlib", "socket", "importlib",
+    }
     dangerous_calls = {"exec", "eval", "compile", "__import__", "open"}
 
     for node in ast.walk(tree):
@@ -185,14 +183,21 @@ def _is_safe_code(code: str) -> bool:
                 if alias.name.split(".")[0] in dangerous_modules:
                     return False
         elif isinstance(node, ast.ImportFrom):
+            # node.module is None for relative imports like `from . import foo`
             if node.module and node.module.split(".")[0] in dangerous_modules:
                 return False
         elif (
             isinstance(node, ast.Call)
             and isinstance(node.func, ast.Name)
             and node.func.id in dangerous_calls
+        ) or (
+            # Block attribute access on dangerous module names, e.g. os.system(...)
+            isinstance(node, ast.Attribute)
+            and isinstance(node.ctx, ast.Load)
+            and isinstance(node.value, ast.Name)
+            and node.value.id in dangerous_modules
         ):
-                return False
+            return False
 
     return True
 

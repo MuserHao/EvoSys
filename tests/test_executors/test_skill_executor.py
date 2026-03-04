@@ -68,7 +68,7 @@ class TestSuccessfulInvocation:
         await executor.execute(_make_action())
         entry = reg.lookup("extract:example.com")
         assert entry is not None
-        assert entry.record.invocation_count == 1
+        assert entry.invocation_count == 1
 
     async def test_token_cost_is_zero(self):
         reg = SkillRegistry()

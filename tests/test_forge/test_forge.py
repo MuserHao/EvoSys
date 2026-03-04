@@ -54,6 +54,26 @@ class TestIsSafeCode:
     def test_allows_re(self):
         assert _is_safe_code("import re\nimport json") is True
 
+    # New tests for improved safety checks
+    def test_rejects_importlib(self):
+        assert _is_safe_code("import importlib") is False
+
+    def test_rejects_importlib_import_module(self):
+        assert _is_safe_code("from importlib import import_module") is False
+
+    def test_rejects_os_attribute_access(self):
+        # os.system("rm -rf /") style attack via attribute access on os name
+        code = "import os\nx = os.system"
+        assert _is_safe_code(code) is False
+
+    def test_rejects_sys_attribute_access(self):
+        code = "sys.exit(1)"
+        assert _is_safe_code(code) is False
+
+    def test_allows_non_dangerous_attribute(self):
+        code = "result = data.strip().lower()"
+        assert _is_safe_code(code) is True
+
 
 class TestForge:
     async def test_no_domain_returns_none(self):

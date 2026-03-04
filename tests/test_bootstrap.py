@@ -48,3 +48,49 @@ class TestBootstrap:
             # StaticPool used by in-memory SQLite doesn't change status text
             pool_status == "StaticPool"
         )
+
+
+class TestDangerousToolFlags:
+    async def test_shell_tool_disabled_by_default(self):
+        rt = await bootstrap(_TEST_CONFIG)
+        try:
+            assert rt.tool_registry.get_tool("shell_exec") is None
+        finally:
+            await rt.shutdown()
+
+    async def test_python_eval_disabled_by_default(self):
+        rt = await bootstrap(_TEST_CONFIG)
+        try:
+            assert rt.tool_registry.get_tool("python_eval") is None
+        finally:
+            await rt.shutdown()
+
+    async def test_shell_tool_enabled_by_config(self):
+        cfg = EvoSysConfig(
+            db_url="sqlite+aiosqlite:///:memory:", enable_shell_tool=True
+        )
+        rt = await bootstrap(cfg)
+        try:
+            assert rt.tool_registry.get_tool("shell_exec") is not None
+        finally:
+            await rt.shutdown()
+
+    async def test_python_eval_enabled_by_config(self):
+        cfg = EvoSysConfig(
+            db_url="sqlite+aiosqlite:///:memory:", enable_python_eval_tool=True
+        )
+        rt = await bootstrap(cfg)
+        try:
+            assert rt.tool_registry.get_tool("python_eval") is not None
+        finally:
+            await rt.shutdown()
+
+    async def test_file_tools_always_registered(self):
+        """file_read, file_write, file_list are never dangerous — always on."""
+        rt = await bootstrap(_TEST_CONFIG)
+        try:
+            assert rt.tool_registry.get_tool("file_read") is not None
+            assert rt.tool_registry.get_tool("file_write") is not None
+            assert rt.tool_registry.get_tool("file_list") is not None
+        finally:
+            await rt.shutdown()

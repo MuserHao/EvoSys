@@ -72,10 +72,10 @@ class TestCompositeForge:
         record = await forge.forge(candidate)
 
         assert record is not None
-        assert record.name == "composite:fetch_parse"
+        assert record.name.startswith("composite:fetch_parse_")
         assert record.implementation_type == ImplementationType.COMPOSITE
         assert record.confidence_score == 0.5  # 5/10
-        assert "composite:fetch_parse" in sr
+        assert record.name in sr
 
     async def test_forge_already_registered(self) -> None:
         sr = SkillRegistry()
@@ -130,6 +130,43 @@ class TestCompositeForge:
         record = await forge.forge(candidate)
         assert record is not None
         assert "a -> b" in record.description
+
+    async def test_different_sequences_produce_unique_names(self) -> None:
+        """Two sequences with the same short names but different order
+        must not collide because the hash disambiguates them."""
+        sr = SkillRegistry()
+        tr = ToolRegistry(sr)
+        tr.register_external(_FakeTool("fetch", {}))
+        tr.register_external(_FakeTool("parse", {}))
+
+        forge = CompositeForge(sr, tr)
+
+        candidate_ab = _make_candidate(["tool:fetch", "tool:parse"])
+        candidate_ba = _make_candidate(["tool:parse", "tool:fetch"])
+
+        record_ab = await forge.forge(candidate_ab)
+        record_ba = await forge.forge(candidate_ba)
+
+        assert record_ab is not None
+        assert record_ba is not None
+        assert record_ab.name != record_ba.name
+
+    async def test_name_contains_hash_suffix(self) -> None:
+        sr = SkillRegistry()
+        tr = ToolRegistry(sr)
+        tr.register_external(_FakeTool("fetch", {}))
+        tr.register_external(_FakeTool("parse", {}))
+
+        forge = CompositeForge(sr, tr)
+        candidate = _make_candidate(["tool:fetch", "tool:parse"])
+        record = await forge.forge(candidate)
+
+        assert record is not None
+        # Name should be "composite:fetch_parse_<6hexchars>"
+        parts = record.name.rsplit("_", 1)
+        assert len(parts) == 2
+        assert len(parts[1]) == 6
+        assert all(c in "0123456789abcdef" for c in parts[1])
         assert "5 times" in record.description
 
 

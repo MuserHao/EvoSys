@@ -8,6 +8,8 @@ skill directly (~$0, ~0ms) instead of repeating the full agent loop.
 
 from __future__ import annotations
 
+import hashlib
+
 import structlog
 
 from evosys.core.interfaces import BaseSkill
@@ -71,10 +73,16 @@ class CompositeForge:
 
         Returns the new SkillRecord on success, or None on failure.
         """
-        # Derive a skill name from the tool sequence
+        # Derive a collision-resistant skill name from the tool sequence.
+        # We join short names for readability and append a 6-char hash of the
+        # full canonical sequence to prevent collisions when truncation would
+        # make two different sequences produce identical strings.
         tool_names = candidate.tool_sequence
         short_names = [n.removeprefix("tool:") for n in tool_names]
-        skill_name = "composite:" + "_".join(short_names)
+        seq_hash = hashlib.sha1(  # sha1 is fine here — non-crypto, just a short ID
+            candidate.canonical_form.encode()
+        ).hexdigest()[:6]
+        skill_name = "composite:" + "_".join(t[:20] for t in short_names)[:80] + f"_{seq_hash}"
 
         # Check if already registered
         if skill_name in self._skill_registry:

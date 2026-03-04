@@ -8,7 +8,7 @@ from ulid import ULID
 
 from evosys.forge.forge import SkillForge
 from evosys.loop import EvolutionLoop, EvolveCycleResult
-from evosys.schemas._types import ImplementationType, new_ulid
+from evosys.schemas._types import ImplementationType, SkillStatus, new_ulid
 from evosys.schemas.skill import SkillRecord
 from evosys.schemas.trajectory import TrajectoryRecord
 from evosys.skills.registry import SkillRegistry
@@ -271,3 +271,129 @@ class TestShadowEvaluation:
         # contain {"title": "Test"} which matches EchoSkill output)
         assert skill.shadow_agreement_rate is not None
         assert skill.total_shadow_comparisons > 0
+
+
+class TestSkillDegradation:
+    """Skills that fail shadow evaluation are marked DEGRADED."""
+
+    def _make_forge_and_register(
+        self,
+        registry: SkillRegistry,
+        impl_class: type,
+    ) -> AsyncMock:
+        forge = AsyncMock(spec=SkillForge)
+
+        async def _forge_and_register(candidate, domain=""):
+            rec = SkillRecord(
+                skill_id=new_ulid(),
+                name=f"extract:{domain}",
+                description=f"Forged for {domain}",
+                implementation_type=ImplementationType.ALGORITHMIC,
+                implementation_path=f"forge:synthesized:{domain}",
+                test_suite_path="auto-generated",
+                pass_rate=1.0,
+                confidence_score=0.8,
+            )
+            registry.register(rec, impl_class())
+            return rec
+
+        forge.forge = AsyncMock(side_effect=_forge_and_register)
+        return forge
+
+    async def test_good_skill_not_degraded(self):
+        """A skill that agrees with LLM output stays ACTIVE."""
+        from evosys.core.interfaces import BaseSkill
+
+        class EchoSkill(BaseSkill):
+            async def invoke(self, d: dict[str, object]) -> dict[str, object]:
+                return {"title": "Test"}
+
+            def validate(self) -> bool:
+                return True
+
+        store = _mock_store({"example.com": 5})
+        registry = SkillRegistry()
+        forge = self._make_forge_and_register(registry, EchoSkill)
+
+        loop = EvolutionLoop(store, forge, registry)
+        result = await loop.run_cycle()
+
+        skill = result.new_skills[0]
+        assert skill.status == SkillStatus.ACTIVE
+        assert result.skills_degraded == 0
+
+    async def test_bad_skill_degraded(self):
+        """A skill that disagrees with LLM output is marked DEGRADED."""
+        from evosys.core.interfaces import BaseSkill
+
+        class WrongSkill(BaseSkill):
+            async def invoke(self, d: dict[str, object]) -> dict[str, object]:
+                # Returns completely different output from LLM ground truth
+                return {"completely_wrong": "data"}
+
+            def validate(self) -> bool:
+                return True
+
+        store = _mock_store({"bad.com": 5})
+        registry = SkillRegistry()
+        forge = self._make_forge_and_register(registry, WrongSkill)
+
+        # threshold=0.5, WrongSkill returns 0 agreement
+        loop = EvolutionLoop(
+            store, forge, registry, shadow_degradation_threshold=0.5
+        )
+        result = await loop.run_cycle()
+
+        skill = result.new_skills[0]
+        assert skill.status == SkillStatus.DEGRADED
+        assert result.skills_degraded == 1
+
+    async def test_degraded_skill_not_routed(self):
+        """A DEGRADED skill is excluded from routing by lookup_active."""
+        from evosys.core.interfaces import BaseSkill
+
+        class WrongSkill(BaseSkill):
+            async def invoke(self, d: dict[str, object]) -> dict[str, object]:
+                return {"completely_wrong": "data"}
+
+            def validate(self) -> bool:
+                return True
+
+        store = _mock_store({"degrade.com": 5})
+        registry = SkillRegistry()
+        forge = self._make_forge_and_register(registry, WrongSkill)
+
+        loop = EvolutionLoop(
+            store, forge, registry, shadow_degradation_threshold=0.5
+        )
+        await loop.run_cycle()
+
+        # The skill should exist but not be routable
+        entry = registry.lookup("extract:degrade.com")
+        assert entry is not None
+        assert entry.record.status == SkillStatus.DEGRADED
+        # lookup_active should return None for a DEGRADED skill
+        assert registry.lookup_active("extract:degrade.com") is None
+
+    async def test_skills_degraded_counter_in_result(self):
+        """EvolveCycleResult.skills_degraded counts degraded skills."""
+        from evosys.core.interfaces import BaseSkill
+
+        class WrongSkill(BaseSkill):
+            async def invoke(self, d: dict[str, object]) -> dict[str, object]:
+                return {"wrong": "1"}
+
+            def validate(self) -> bool:
+                return True
+
+        store = _mock_store({"x.com": 5, "y.com": 4})
+        registry = SkillRegistry()
+        forge = self._make_forge_and_register(registry, WrongSkill)
+
+        loop = EvolutionLoop(
+            store, forge, registry, shadow_degradation_threshold=0.5
+        )
+        result = await loop.run_cycle()
+
+        assert result.forge_succeeded == 2
+        assert result.skills_degraded == 2

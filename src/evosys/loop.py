@@ -21,7 +21,7 @@ from evosys.forge.forge import SkillForge
 from evosys.reflection.pattern_detector import PatternCandidate, PatternDetector
 from evosys.reflection.sequence_detector import SequenceDetector
 from evosys.reflection.shadow_evaluator import ShadowEvaluator
-from evosys.schemas._types import ForgeStatus, new_ulid
+from evosys.schemas._types import ForgeStatus, SkillStatus, new_ulid
 from evosys.schemas.skill import SkillRecord
 from evosys.schemas.slice import SliceCandidate
 from evosys.skills.registry import SkillRegistry
@@ -43,6 +43,8 @@ class EvolveCycleResult:
     # Phase 9: tool-call sequence detection
     sequences_detected: int = 0
     composites_forged: int = 0
+    # Skills whose shadow agreement dropped below threshold this cycle
+    skills_degraded: int = 0
 
 
 class EvolutionLoop:
@@ -59,6 +61,7 @@ class EvolutionLoop:
         tool_registry: ToolRegistry | None = None,
         composite_forge: CompositeForge | None = None,
         sequence_detector: SequenceDetector | None = None,
+        shadow_degradation_threshold: float = 0.5,
     ) -> None:
         self._store = store
         self._forge = forge
@@ -70,6 +73,9 @@ class EvolutionLoop:
         self._sequence_detector = sequence_detector or SequenceDetector(
             min_frequency=min_frequency
         )
+        # Skills with shadow_agreement_rate below this threshold are marked
+        # DEGRADED so the routing layer stops sending traffic to them.
+        self._shadow_degradation_threshold = shadow_degradation_threshold
 
     async def run_cycle(self) -> EvolveCycleResult:
         """Execute one evolution cycle and return a summary."""
@@ -83,6 +89,7 @@ class EvolutionLoop:
         already_covered = 0
         forge_attempted = 0
         forge_succeeded = 0
+        skills_degraded = 0
         new_skills: list[SkillRecord] = []
 
         for pattern in patterns:
@@ -93,7 +100,12 @@ class EvolutionLoop:
                 log.info("evolve.already_covered", skill_name=skill_name)
                 continue
 
-            # Convert pattern to SliceCandidate for the forge
+            # Convert pattern to SliceCandidate for the forge.
+            # boundary_confidence is a heuristic: we treat 10+ observations
+            # as "fully confident" in the pattern (score = 1.0) and scale
+            # linearly below that.  This caps the prior so that a small number
+            # of observations can't produce a high-confidence skill; the
+            # forge's own pass_rate test provides the second quality gate.
             candidate = SliceCandidate(
                 candidate_id=new_ulid(),
                 action_sequence=[pattern.action_name],
@@ -110,8 +122,11 @@ class EvolutionLoop:
                 candidate, domain=pattern.domain
             )
             if record is not None:
-                # Shadow-evaluate the forged skill
-                await self._shadow_evaluate(record, pattern)
+                # Shadow-evaluate the forged skill; degrade it if agreement
+                # is below threshold so it won't be routed to.
+                degraded = await self._shadow_evaluate(record, pattern)
+                if degraded:
+                    skills_degraded += 1
 
                 forge_succeeded += 1
                 new_skills.append(record)
@@ -151,6 +166,7 @@ class EvolutionLoop:
             new_skills=new_skills,
             sequences_detected=sequences_detected,
             composites_forged=composites_forged,
+            skills_degraded=skills_degraded,
         )
 
         log.info(
@@ -159,6 +175,7 @@ class EvolutionLoop:
             covered=result.already_covered,
             attempted=result.forge_attempted,
             succeeded=result.forge_succeeded,
+            degraded=result.skills_degraded,
             sequences=result.sequences_detected,
             composites=result.composites_forged,
         )
@@ -169,18 +186,22 @@ class EvolutionLoop:
         self,
         record: SkillRecord,
         pattern: PatternCandidate,
-    ) -> None:
+    ) -> bool:
         """Run shadow evaluation on a forged skill using stored samples.
 
         Compares the skill's output against the stored LLM outputs from
-        the pattern's sample data. Updates the record's shadow metrics.
+        the pattern's sample data.  Updates the record's shadow metrics
+        in-place and marks the skill DEGRADED if its agreement rate falls
+        below ``shadow_degradation_threshold``.
+
+        Returns ``True`` if the skill was degraded, ``False`` otherwise.
         """
         if not pattern.sample_params or not pattern.sample_results:
-            return
+            return False
 
         entry = self._registry.lookup(record.name)
         if entry is None:
-            return
+            return False
 
         total_comparisons = 0
         agreements = 0
@@ -202,14 +223,28 @@ class EvolutionLoop:
                 total_comparisons += 1
                 # Skill failed — counts as disagreement
 
-        if total_comparisons > 0:
-            agreement_rate = agreements / total_comparisons
-            record.shadow_agreement_rate = round(agreement_rate, 4)
-            record.total_shadow_comparisons = total_comparisons
+        if total_comparisons == 0:
+            return False
 
+        agreement_rate = agreements / total_comparisons
+        record.shadow_agreement_rate = round(agreement_rate, 4)
+        record.total_shadow_comparisons = total_comparisons
+
+        degraded = agreement_rate < self._shadow_degradation_threshold
+        if degraded:
+            record.status = SkillStatus.DEGRADED
+            log.warning(
+                "evolve.skill_degraded",
+                skill_name=record.name,
+                agreement_rate=agreement_rate,
+                threshold=self._shadow_degradation_threshold,
+            )
+        else:
             log.info(
                 "evolve.shadow_eval",
                 skill_name=record.name,
                 agreement_rate=agreement_rate,
                 comparisons=total_comparisons,
             )
+
+        return degraded

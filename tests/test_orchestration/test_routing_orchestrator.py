@@ -146,3 +146,17 @@ class TestDomainExtraction:
 
     def test_invalid_url(self):
         assert RoutingOrchestrator._extract_domain("not-a-url") is None
+
+    # New tests enabled by urllib.parse
+    def test_ip_address(self):
+        assert RoutingOrchestrator._extract_domain("http://192.168.1.1/data") == "192.168.1.1"
+
+    def test_localhost(self):
+        assert RoutingOrchestrator._extract_domain("http://localhost:8000/api") == "localhost"
+
+    def test_subdomain_preserved(self):
+        result = RoutingOrchestrator._extract_domain("https://api.example.com/v1")
+        assert result == "api.example.com"
+
+    def test_no_path(self):
+        assert RoutingOrchestrator._extract_domain("https://example.com") == "example.com"
