@@ -17,6 +17,7 @@ from evosys.executors.http_executor import HttpExecutor
 from evosys.schemas._types import new_ulid
 
 if TYPE_CHECKING:
+    from evosys.storage.embedding_store import EmbeddingMemoryStore
     from evosys.storage.memory_store import MemoryStore
     from evosys.storage.schedule_store import ScheduleStore
 
@@ -1078,6 +1079,99 @@ class RecallTool:
                     "type": "object",
                     "properties": self.parameters_schema,
                     "required": [],
+                },
+            },
+        }
+
+
+# ---------------------------------------------------------------------------
+# Semantic memory tools — embedding-based recall
+# ---------------------------------------------------------------------------
+
+
+class SemanticRecallTool:
+    """Search long-term memory using natural language queries.
+
+    Uses vector embeddings to find relevant stored information even
+    when the query doesn't exactly match the stored keys/values.
+    Falls back to keyword search if embedding fails.
+    """
+
+    def __init__(
+        self,
+        embedding_store: EmbeddingMemoryStore,
+        *,
+        top_k: int = 5,
+        namespace: str = "default",
+    ) -> None:
+        self._store = embedding_store
+        self._top_k = top_k
+        self._namespace = namespace
+
+    @property
+    def name(self) -> str:
+        return "semantic_recall"
+
+    @property
+    def description(self) -> str:
+        return (
+            "Search long-term memory using a natural language query. "
+            "Finds relevant stored information even when the exact key "
+            "isn't known. Use this when you need to recall previously "
+            "stored research, notes, or context by meaning rather than "
+            "exact key name."
+        )
+
+    @property
+    def parameters_schema(self) -> dict[str, object]:
+        return {
+            "query": {
+                "type": "string",
+                "description": "Natural language search query",
+            },
+            "top_k": {
+                "type": "integer",
+                "description": f"Number of results to return (default {self._top_k})",
+            },
+        }
+
+    async def __call__(self, **kwargs: object) -> dict[str, object]:
+        query = str(kwargs.get("query", "")).strip()
+        top_k = int(str(kwargs.get("top_k", self._top_k)))
+
+        if not query:
+            return {"error": "query must not be empty"}
+
+        results = await self._store.search(
+            query, namespace=self._namespace, top_k=top_k
+        )
+
+        if not results:
+            return {"results": [], "count": 0, "query": query}
+
+        return {
+            "results": [
+                {
+                    "source_key": r.source_key,
+                    "text": r.text[:500],
+                    "score": round(r.score, 4),
+                }
+                for r in results
+            ],
+            "count": len(results),
+            "query": query,
+        }
+
+    def to_openai_tool(self) -> dict[str, object]:
+        return {
+            "type": "function",
+            "function": {
+                "name": self.name,
+                "description": self.description,
+                "parameters": {
+                    "type": "object",
+                    "properties": self.parameters_schema,
+                    "required": ["query"],
                 },
             },
         }

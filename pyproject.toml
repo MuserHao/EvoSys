@@ -93,6 +93,13 @@ skill-scheduling = [
     "tenacity>=8.0",
 ]
 
+# Install with: uv sync --group slack
+# Slack bot integration — Socket Mode for no-public-URL operation.
+slack = [
+    "slack_bolt>=1.18",
+    "slack_sdk>=3.27",
+]
+
 # Install with: uv sync --group skill-search
 # Vector similarity search for skill lookup — finds the closest skill to a
 # task even when no exact domain match exists.

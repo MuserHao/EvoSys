@@ -69,6 +69,8 @@ class EvolutionLoop:
         shadow_degradation_threshold: float = 0.5,
         max_forge_per_cycle: int = 5,
         skill_store: SkillStore | None = None,
+        reforge_enabled: bool = True,
+        reforge_min_samples: int = 3,
     ) -> None:
         self._store = store
         self._forge = forge
@@ -87,6 +89,8 @@ class EvolutionLoop:
         # Patterns above the cap are deferred to the next cycle.
         self._max_forge_per_cycle = max_forge_per_cycle
         self._skill_store = skill_store
+        self._reforge_enabled = reforge_enabled
+        self._reforge_min_samples = reforge_min_samples
 
     async def run_cycle(self) -> EvolveCycleResult:
         """Execute one evolution cycle and return a summary."""
@@ -208,6 +212,23 @@ class EvolutionLoop:
             composites_forged=composites_forged,
             skills_degraded=skills_degraded,
         )
+
+        # Path 3: Re-forge degraded skills
+        if self._reforge_enabled and skills_degraded > 0:
+            try:
+                from evosys.forge.reforger import SkillReforger
+                reforger = SkillReforger(
+                    self._store,
+                    self._forge,
+                    self._registry,
+                    self._skill_store,
+                    min_samples=self._reforge_min_samples,
+                )
+                reforged_count = await reforger.reforge_degraded()
+                if reforged_count > 0:
+                    log.info("evolve.reforged", count=reforged_count)
+            except Exception:
+                log.exception("evolve.reforge_error")
 
         log.info(
             "evolve.cycle_complete",

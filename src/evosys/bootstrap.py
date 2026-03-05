@@ -10,16 +10,21 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from evosys.agents.agent import Agent
 from evosys.agents.extraction_agent import ExtractionAgent
+from evosys.agents.sub_agent import SubAgentManager
 from evosys.config import EvoSysConfig
+from evosys.executors.browser_profiles import BrowserProfileManager
 from evosys.executors.http_executor import HttpExecutor
 from evosys.executors.skill_executor import SkillExecutor
 from evosys.forge.forge import SkillForge
 from evosys.forge.synthesizer import SkillSynthesizer
 from evosys.llm.client import LLMClient
+from evosys.llm.embeddings import LiteLLMEmbeddingProvider
+from evosys.llm.router import ModelRouter
 from evosys.loop import EvolutionLoop
 from evosys.orchestration.routing_orchestrator import RoutingOrchestrator
 from evosys.skills.loader import register_builtin_skills
 from evosys.skills.registry import SkillRegistry
+from evosys.storage.embedding_store import EmbeddingMemoryStore
 from evosys.storage.engine import dispose_engine, init_engine, make_session_factory
 from evosys.storage.memory_store import MemoryStore
 from evosys.storage.schedule_store import ScheduleStore
@@ -35,6 +40,7 @@ from evosys.tools.builtins import (
     PythonEvalTool,
     RecallTool,
     RememberTool,
+    SemanticRecallTool,
     SendEmailTool,
     ShellExecTool,
     WatchTool,
@@ -42,6 +48,7 @@ from evosys.tools.builtins import (
 )
 from evosys.tools.mcp import MCPManager, MCPServerConfig
 from evosys.tools.registry import ToolRegistry
+from evosys.tools.sub_agent_tool import SubAgentTool
 from evosys.trajectory.logger import TrajectoryLogger
 
 log = structlog.get_logger()
@@ -59,7 +66,7 @@ class EvoSysRuntime:
     schedule_store: ScheduleStore
     skill_store: SkillStore
     trajectory_logger: TrajectoryLogger
-    llm: LLMClient
+    llm: LLMClient | ModelRouter
     http_executor: HttpExecutor
     skill_registry: SkillRegistry
     skill_executor: SkillExecutor
@@ -71,6 +78,10 @@ class EvoSysRuntime:
     tool_registry: ToolRegistry
     general_agent: Agent
     mcp_manager: MCPManager
+    # New components
+    embedding_store: EmbeddingMemoryStore | None = None
+    sub_agent_manager: SubAgentManager | None = None
+    browser_profile_manager: BrowserProfileManager | None = None
 
     # Backward compat alias
     @property
@@ -103,11 +114,28 @@ async def bootstrap(
     skill_store = SkillStore(session_factory)
     trajectory_logger = TrajectoryLogger(trajectory_store)
 
-    llm = LLMClient(
-        model=cfg.llm_model,
-        temperature=cfg.llm_temperature,
-        max_tokens=cfg.llm_max_tokens,
-    )
+    # --- LLM: use ModelRouter if fallback models are configured ---
+    llm: LLMClient | ModelRouter
+    fallback_models = [
+        m.strip() for m in cfg.llm_fallback_models.split(",") if m.strip()
+    ]
+    if fallback_models:
+        all_models = [cfg.llm_model, *fallback_models]
+        llm = ModelRouter(
+            all_models,
+            temperature=cfg.llm_temperature,
+            max_tokens=cfg.llm_max_tokens,
+            cooldown_s=cfg.llm_cooldown_s,
+            max_consecutive_failures=cfg.llm_retry_attempts,
+        )
+        log.info("bootstrap.model_router", models=all_models)
+    else:
+        llm = LLMClient(
+            model=cfg.llm_model,
+            temperature=cfg.llm_temperature,
+            max_tokens=cfg.llm_max_tokens,
+        )
+
     http_executor = HttpExecutor(
         timeout_s=cfg.http_timeout_s,
         max_body_bytes=cfg.http_max_body_bytes,
@@ -115,6 +143,21 @@ async def bootstrap(
     )
     if cfg.enable_browser_fetch:
         log.info("bootstrap.browser_fetch_enabled")
+
+    # --- Embedding memory ---
+    embedding_provider = LiteLLMEmbeddingProvider(
+        model=cfg.embedding_model,
+        dimensions=cfg.embedding_dimensions,
+    )
+    embedding_store = EmbeddingMemoryStore(
+        session_factory, embedding_provider
+    )
+
+    # --- Browser profiles ---
+    browser_profile_manager: BrowserProfileManager | None = None
+    if cfg.enable_browser_fetch:
+        browser_profile_manager = BrowserProfileManager(cfg.browser_profiles_dir)
+        log.info("bootstrap.browser_profiles_enabled")
 
     skill_registry = SkillRegistry()
     if load_builtin_skills:
@@ -163,6 +206,10 @@ async def bootstrap(
     tool_registry.register_external(WatchTool(schedule_store))
     tool_registry.register_external(InboxTool(schedule_store))
     tool_registry.register_external(HttpApiTool())
+    # Semantic recall via embedding store
+    tool_registry.register_external(
+        SemanticRecallTool(embedding_store, top_k=cfg.embedding_search_top_k)
+    )
     # SendEmailTool only registers when SMTP is configured — self-checks env vars
     email_tool = SendEmailTool()
     if email_tool._is_configured():
@@ -192,6 +239,31 @@ async def bootstrap(
                     log.exception("bootstrap.mcp_connect_failed")
     except (json.JSONDecodeError, TypeError):
         pass  # No valid MCP config
+
+    # --- Sub-agent manager ---
+    def _agent_factory(depth: int = 0) -> Agent:
+        """Create a child agent at the given depth."""
+        child_logger = TrajectoryLogger(trajectory_store)
+        return Agent(
+            llm=llm,
+            tool_registry=tool_registry,
+            trajectory_logger=child_logger,
+            max_iterations=cfg.agent_max_iterations,
+            system_prompt=cfg.agent_system_prompt,
+            timeout_s=cfg.agent_timeout_s,
+        )
+
+    sub_agent_manager = SubAgentManager(
+        _agent_factory,
+        max_depth=cfg.sub_agent_max_depth,
+        max_concurrent=cfg.sub_agent_max_concurrent,
+    )
+    tool_registry.register_external(SubAgentTool(sub_agent_manager))
+    log.info(
+        "bootstrap.sub_agent_enabled",
+        max_depth=cfg.sub_agent_max_depth,
+        max_concurrent=cfg.sub_agent_max_concurrent,
+    )
 
     # General agent
     agent_logger = TrajectoryLogger(trajectory_store)
@@ -225,6 +297,9 @@ async def bootstrap(
         tool_registry=tool_registry,
         general_agent=general_agent,
         mcp_manager=mcp_manager,
+        embedding_store=embedding_store,
+        sub_agent_manager=sub_agent_manager,
+        browser_profile_manager=browser_profile_manager,
     )
 
 

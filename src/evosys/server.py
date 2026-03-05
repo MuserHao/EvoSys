@@ -5,6 +5,8 @@ Starts a server with:
 - POST /agent/run — general-purpose agent task execution
 - GET /skills — list registered skills
 - GET /status — system health and evolution metrics
+- WebSocket /ws/chat — real-time chat (when web_chat_enabled)
+- Slack Socket Mode bot (when slack_enabled)
 
 A background task periodically runs evolution cycles.
 """
@@ -14,10 +16,12 @@ from __future__ import annotations
 import asyncio
 import contextlib
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Any
 
 import structlog
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, WebSocket
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from evosys.bootstrap import EvoSysRuntime, bootstrap
@@ -37,6 +41,8 @@ _scheduler_task: asyncio.Task[None] | None = None
 _last_evolve_result: EvolveCycleResult | None = None
 _total_evolve_cycles: int = 0
 _total_skills_forged: int = 0
+_slack_bot: Any = None
+_ws_handler: Any = None
 
 
 # ---------------------------------------------------------------------------
@@ -207,6 +213,7 @@ async def _scheduler_worker(tick_seconds: float = 60.0) -> None:
 async def lifespan(app: FastAPI):
     """Bootstrap EvoSys on startup, tear down on shutdown."""
     global _runtime, _evolution_loop, _evolution_task, _scheduler_task
+    global _slack_bot, _ws_handler
 
     cfg = EvoSysConfig.from_env()
     _runtime = await bootstrap(cfg)
@@ -224,15 +231,46 @@ async def lifespan(app: FastAPI):
     # Start scheduled task runner (checks for due tasks every 60 seconds)
     _scheduler_task = asyncio.create_task(_scheduler_worker(tick_seconds=60.0))
 
+    # --- Slack bot ---
+    if cfg.slack_enabled and cfg.slack_bot_token and cfg.slack_app_token:
+        try:
+            from evosys.channels.slack.bot import SlackBot
+            _slack_bot = SlackBot(cfg, _runtime.general_agent)
+            await _slack_bot.start()
+        except Exception:
+            log.exception("serve.slack_start_failed")
+
+    # --- WebSocket chat handler ---
+    if cfg.web_chat_enabled:
+        from evosys.channels.web.ws_handler import WebSocketChatHandler
+        _ws_handler = WebSocketChatHandler(_runtime.general_agent)
+        log.info("serve.web_chat_enabled")
+
+    # --- Auth middleware ---
+    if cfg.auth_enabled:
+        from evosys.security.auth import BearerAuthMiddleware
+        from evosys.security.token import get_or_create_token
+        token = get_or_create_token(explicit_token=cfg.auth_token)
+        app.add_middleware(BearerAuthMiddleware, token=token)
+        log.info("serve.auth_enabled")
+
     log.info(
         "serve.started",
         skills=len(_runtime.skill_registry),
         db=cfg.db_url,
+        slack=cfg.slack_enabled,
+        web_chat=cfg.web_chat_enabled,
     )
 
     yield
 
     # Shutdown
+    if _slack_bot is not None:
+        try:
+            await _slack_bot.stop()
+        except Exception:
+            log.exception("serve.slack_stop_failed")
+
     for task in (_evolution_task, _scheduler_task):
         if task is not None:
             task.cancel()
@@ -255,6 +293,11 @@ app = FastAPI(
     version="0.1.0",
     lifespan=lifespan,
 )
+
+# Mount static files for web chat
+_static_dir = Path(__file__).parent / "channels" / "web" / "static"
+if _static_dir.is_dir():
+    app.mount("/static", StaticFiles(directory=str(_static_dir)), name="static")
 
 
 def _require_runtime() -> EvoSysRuntime:
@@ -376,3 +419,17 @@ async def trigger_evolve() -> dict[str, Any]:
         "forge_succeeded": result.forge_succeeded,
         "new_skills": [s.name for s in result.new_skills],
     }
+
+
+# ---------------------------------------------------------------------------
+# WebSocket chat endpoint
+# ---------------------------------------------------------------------------
+
+
+@app.websocket("/ws/chat")
+async def ws_chat(websocket: WebSocket) -> None:
+    """WebSocket endpoint for real-time chat."""
+    if _ws_handler is None:
+        await websocket.close(code=1013, reason="Web chat is not enabled")
+        return
+    await _ws_handler.handle(websocket)

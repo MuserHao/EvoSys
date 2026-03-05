@@ -265,6 +265,88 @@ def skills_list(
     console.print(table)
 
 
+@skills_app.command("export")
+def skills_export(
+    name: str = typer.Argument(help="Skill name to export."),
+    output_dir: str = typer.Option(".", "--output", "-o", help="Output directory."),
+    db_url: str = typer.Option(
+        "sqlite+aiosqlite:///data/evosys.db", "--db", help="Database URL."
+    ),
+) -> None:
+    """Export a skill as a portable manifest."""
+    try:
+        result = asyncio.run(_export_skill(db_url, name, output_dir))
+        console.print(f"[green]Exported:[/green] {result}")
+    except Exception as exc:
+        console.print(f"[red]Export failed:[/red] {exc}")
+        raise typer.Exit(code=1) from exc
+
+
+async def _export_skill(db_url: str, name: str, output_dir: str) -> str:
+    from evosys.skills.marketplace import SkillMarketplace
+
+    cfg = EvoSysConfig(db_url=db_url)
+    runtime = await bootstrap(cfg)
+    try:
+        mp = SkillMarketplace(runtime.skill_store, runtime.skill_registry)
+        return await mp.export_skill(name, output_dir)
+    finally:
+        await runtime.shutdown()
+
+
+@skills_app.command("import")
+def skills_import(
+    path: str = typer.Argument(help="Path to skill manifest file."),
+    db_url: str = typer.Option(
+        "sqlite+aiosqlite:///data/evosys.db", "--db", help="Database URL."
+    ),
+) -> None:
+    """Import a skill from a manifest file."""
+    try:
+        result = asyncio.run(_import_skill(db_url, path))
+        console.print(f"[green]Imported:[/green] {result}")
+    except Exception as exc:
+        console.print(f"[red]Import failed:[/red] {exc}")
+        raise typer.Exit(code=1) from exc
+
+
+async def _import_skill(db_url: str, path: str) -> str:
+    from evosys.skills.marketplace import SkillMarketplace
+
+    cfg = EvoSysConfig(db_url=db_url)
+    runtime = await bootstrap(cfg)
+    try:
+        mp = SkillMarketplace(runtime.skill_store, runtime.skill_registry)
+        return await mp.import_skill(path)
+    finally:
+        await runtime.shutdown()
+
+
+@skills_app.command("search")
+def skills_search(
+    query: str = typer.Argument(help="Search query for skills."),
+) -> None:
+    """Search for skills (placeholder — searches local registry)."""
+    from evosys.skills.loader import register_builtin_skills
+    from evosys.skills.registry import SkillRegistry
+
+    registry = SkillRegistry()
+    register_builtin_skills(registry)
+
+    q = query.lower()
+    entries = [
+        e for e in registry.list_all()
+        if q in e.record.name.lower() or q in e.record.description.lower()
+    ]
+
+    if not entries:
+        console.print(f"[dim]No skills matching '{query}'.[/dim]")
+        return
+
+    for e in entries:
+        console.print(f"[cyan]{e.record.name}[/cyan] — {e.record.description}")
+
+
 # ---------------------------------------------------------------------------
 # evosys reflect
 # ---------------------------------------------------------------------------
@@ -341,7 +423,7 @@ def evolve(
         help="Database URL.",
     ),
 ) -> None:
-    """Run one evolution cycle: reflect → forge → register."""
+    """Run one evolution cycle: reflect -> forge -> register."""
     cfg = EvoSysConfig(db_url=db_url)
 
     try:
@@ -403,6 +485,10 @@ def info() -> None:
     console.print(f"  DB URL:         {cfg.db_url}")
     console.print(f"  HTTP timeout:   {cfg.http_timeout_s}s")
     console.print(f"  Skill threshold:{cfg.skill_confidence_threshold}")
+    if cfg.llm_fallback_models:
+        console.print(f"  Fallback models:{cfg.llm_fallback_models}")
+    console.print(f"  Slack enabled:  {cfg.slack_enabled}")
+    console.print(f"  Web chat:       {cfg.web_chat_enabled}")
 
 
 # ---------------------------------------------------------------------------
@@ -432,6 +518,7 @@ def serve(
     console.print("  GET  /skills     — list registered skills")
     console.print("  GET  /status     — system health & evolution metrics")
     console.print("  POST /evolve     — manually trigger an evolution cycle")
+    console.print("  WS   /ws/chat    — real-time WebSocket chat")
     console.print()
 
     uvicorn.run(
@@ -440,6 +527,92 @@ def serve(
         port=port,
         log_level="info",
     )
+
+
+# ---------------------------------------------------------------------------
+# evosys slack
+# ---------------------------------------------------------------------------
+
+@app.command()
+def slack() -> None:
+    """Start the Slack bot (Socket Mode).
+
+    Requires EVOSYS_SLACK_BOT_TOKEN and EVOSYS_SLACK_APP_TOKEN env vars.
+    """
+    cfg = EvoSysConfig.from_env()
+    if not cfg.slack_bot_token or not cfg.slack_app_token:
+        console.print(
+            "[red]Missing Slack tokens.[/red] Set EVOSYS_SLACK_BOT_TOKEN "
+            "and EVOSYS_SLACK_APP_TOKEN environment variables."
+        )
+        raise typer.Exit(code=1)
+
+    console.print("[bold]Starting EvoSys Slack bot...[/bold]")
+    asyncio.run(_run_slack(cfg))
+
+
+async def _run_slack(cfg: EvoSysConfig) -> None:
+    from evosys.channels.slack.bot import SlackBot
+
+    runtime = await bootstrap(cfg)
+    bot = SlackBot(cfg, runtime.general_agent)
+    try:
+        await bot.start()
+        # Keep running until interrupted
+        while True:
+            await asyncio.sleep(3600)
+    except (KeyboardInterrupt, asyncio.CancelledError):
+        pass
+    finally:
+        await bot.stop()
+        await runtime.shutdown()
+
+
+# ---------------------------------------------------------------------------
+# evosys chat
+# ---------------------------------------------------------------------------
+
+@app.command()
+def chat(
+    session_name: str = typer.Option(
+        "",
+        "--session",
+        help="Session name to persist conversation history.",
+    ),
+    db_url: str = typer.Option(
+        "sqlite+aiosqlite:///data/evosys.db",
+        "--db",
+        help="Database URL.",
+    ),
+) -> None:
+    """Start an interactive conversation with EvoSys.
+
+    Messages accumulate in context. Use --session to persist across restarts.
+    """
+    try:
+        asyncio.run(_run_chat(db_url, session_name))
+    except (KeyboardInterrupt, EOFError):
+        console.print("\n[dim]Goodbye![/dim]")
+
+
+async def _run_chat(db_url: str, session_name: str) -> None:
+    from evosys.channels.cli_chat import CLIChatSession
+
+    cfg = EvoSysConfig(
+        db_url=db_url,
+        enable_shell_tool=True,
+        enable_python_eval_tool=True,
+    )
+    runtime = await bootstrap(cfg)
+    try:
+        session = CLIChatSession(
+            agent=runtime.general_agent,
+            memory_store=runtime.memory_store,
+            session_name=session_name,
+        )
+        await session.run()
+    finally:
+        await runtime.shutdown()
 
 
 def main() -> None:
