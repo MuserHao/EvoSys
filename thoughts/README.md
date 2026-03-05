@@ -14,8 +14,10 @@ discovered during development. These are not specs — they're a learning journa
 | 007 | [The First Concrete Task — Structured Data Extraction](007-first-concrete-task.md) | Resolved | 2026-03-03 |
 | 008 | [Everyday User Pain Points — What Should EvoSys Actually Do?](008-everyday-user-pain-points.md) | Partially resolved | 2026-03-03 |
 | 009 | [Phase 1-4 Implementation Review — What We Actually Built](009-implementation-review.md) | Resolved | 2026-03-03 |
-| 010 | [Stretch Goals — Where EvoSys Goes From Here](010-stretch-goals.md) | Active | 2026-03-04 |
+| 010 | [Stretch Goals — Where EvoSys Goes From Here](010-stretch-goals.md) | Partially resolved | 2026-03-04 |
 | 011 | [Blog Update — From Vision to Working System](011-blog-update.md) | Active | 2026-03-04 |
+| 012 | [EvoSys vs OpenClaw — Gap Analysis](012-gap-analysis-vs-openclaw.md) | Active | 2026-03-05 |
+| 013 | [Concrete Roadmap — From Prototype to Personal System](013-concrete-roadmap.md) | Active | 2026-03-05 |
 
 ## Status definitions
 
@@ -24,6 +26,16 @@ discovered during development. These are not specs — they're a learning journa
 - **Partially resolved**: Core idea implemented, extensions remaining
 - **Resolved**: Implemented or decided, kept for historical context
 - **Validated**: Hypothesis tested and confirmed
+
+## Reading Order
+
+**For understanding the vision**: 001 → 002 → 003 → 006 → 007
+
+**For understanding what was built**: 009 → 010 → 011
+
+**For understanding where we're going**: 012 → 013
+
+**For deep dives**: 005 (self-practice), 008 (user pain points)
 
 ## Blog Posts
 
