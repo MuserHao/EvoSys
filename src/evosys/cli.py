@@ -259,7 +259,7 @@ def skills_list(
             entry.record.status.value,
             f"{entry.record.confidence_score:.2f}",
             entry.record.implementation_type.value,
-            str(entry.record.invocation_count),
+            str(entry.invocation_count),
         )
 
     console.print(table)
@@ -381,21 +381,9 @@ def evolve(
 async def _run_evolve(
     cfg: EvoSysConfig, min_frequency: int
 ) -> EvolveCycleResult:
-    from evosys.forge.forge import SkillForge
-    from evosys.forge.synthesizer import SkillSynthesizer
-    from evosys.loop import EvolutionLoop
-
     runtime = await bootstrap(cfg)
     try:
-        synthesizer = SkillSynthesizer(runtime.llm)
-        forge = SkillForge(synthesizer, runtime.skill_registry)
-        loop = EvolutionLoop(
-            runtime.trajectory_store,
-            forge,
-            runtime.skill_registry,
-            min_frequency=min_frequency,
-        )
-        return await loop.run_cycle()
+        return await runtime.evolution_loop.run_cycle()
     finally:
         await runtime.shutdown()
 
