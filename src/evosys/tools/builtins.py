@@ -2,7 +2,7 @@
 
 These wrap existing EvoSys components (HttpExecutor, ExtractionAgent) so
 the agent loop can call them as standard tools.  System tools (shell, file
-I/O, Python eval) are also provided as direct implementations.
+I/O, Python eval) and memory tools are also provided as direct implementations.
 """
 
 from __future__ import annotations
@@ -10,11 +10,14 @@ from __future__ import annotations
 import asyncio
 import sys
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from evosys.core.types import Action
 from evosys.executors.http_executor import HttpExecutor
 from evosys.schemas._types import new_ulid
+
+if TYPE_CHECKING:
+    from evosys.storage.memory_store import MemoryStore
 
 
 class WebFetchTool:
@@ -555,6 +558,132 @@ class PythonEvalTool:
                     "type": "object",
                     "properties": self.parameters_schema,
                     "required": ["code"],
+                },
+            },
+        }
+
+
+# ---------------------------------------------------------------------------
+# Memory tools — cross-session key-value storage
+# ---------------------------------------------------------------------------
+
+
+class RememberTool:
+    """Store a value in persistent memory under a named key.
+
+    Memory survives across agent sessions and can be recalled by key.
+    Use this to save preferences, tracked items, prior research results,
+    or any information the user wants the agent to remember.
+    """
+
+    def __init__(self, memory_store: MemoryStore, namespace: str = "default") -> None:
+        self._store = memory_store
+        self._namespace = namespace
+
+    @property
+    def name(self) -> str:
+        return "remember"
+
+    @property
+    def description(self) -> str:
+        return (
+            "Save a piece of information to persistent memory under a key. "
+            "The agent can recall it in future sessions using the 'recall' tool. "
+            "Use this for user preferences, items to track, research findings, "
+            "or anything the user wants remembered."
+        )
+
+    @property
+    def parameters_schema(self) -> dict[str, object]:
+        return {
+            "key": {
+                "type": "string",
+                "description": (
+                    "Short identifier for this memory"
+                    " (e.g. 'laptop_budget', 'user_name')"
+                ),
+            },
+            "value": {
+                "type": "string",
+                "description": "The value to remember",
+            },
+        }
+
+    async def __call__(self, **kwargs: object) -> dict[str, object]:
+        key = str(kwargs.get("key", "")).strip()
+        value = str(kwargs.get("value", ""))
+        if not key:
+            return {"error": "key must not be empty"}
+        await self._store.set(key, value, namespace=self._namespace)
+        return {"stored": True, "key": key}
+
+    def to_openai_tool(self) -> dict[str, object]:
+        return {
+            "type": "function",
+            "function": {
+                "name": self.name,
+                "description": self.description,
+                "parameters": {
+                    "type": "object",
+                    "properties": self.parameters_schema,
+                    "required": ["key", "value"],
+                },
+            },
+        }
+
+
+class RecallTool:
+    """Retrieve a previously remembered value by key.
+
+    Returns the value stored with 'remember', or lists all stored keys
+    if no key is provided.
+    """
+
+    def __init__(self, memory_store: MemoryStore, namespace: str = "default") -> None:
+        self._store = memory_store
+        self._namespace = namespace
+
+    @property
+    def name(self) -> str:
+        return "recall"
+
+    @property
+    def description(self) -> str:
+        return (
+            "Retrieve a value from persistent memory by key, or list all "
+            "remembered keys if no key is given. Use this to access "
+            "previously saved preferences, tracked items, or research findings."
+        )
+
+    @property
+    def parameters_schema(self) -> dict[str, object]:
+        return {
+            "key": {
+                "type": "string",
+                "description": "The key to look up. Omit to list all remembered keys.",
+            },
+        }
+
+    async def __call__(self, **kwargs: object) -> dict[str, object]:
+        key = str(kwargs.get("key", "")).strip()
+        if not key:
+            keys = await self._store.list_keys(namespace=self._namespace)
+            return {"keys": keys, "count": len(keys)}
+        value = await self._store.get(key, namespace=self._namespace)
+        if value is None:
+            return {"found": False, "key": key}
+        return {"found": True, "key": key, "value": value}
+
+    def to_openai_tool(self) -> dict[str, object]:
+        return {
+            "type": "function",
+            "function": {
+                "name": self.name,
+                "description": self.description,
+                "parameters": {
+                    "type": "object",
+                    "properties": self.parameters_schema,
+                    "required": [],
                 },
             },
         }

@@ -6,6 +6,8 @@ from evosys.tools.builtins import (
     FileReadTool,
     FileWriteTool,
     PythonEvalTool,
+    RecallTool,
+    RememberTool,
     ShellExecTool,
     WebFetchTool,
 )
@@ -22,6 +24,8 @@ __all__ = [
     "MCPServerConfig",
     "MCPToolWrapper",
     "PythonEvalTool",
+    "RecallTool",
+    "RememberTool",
     "ShellExecTool",
     "SkillToolAdapter",
     "ToolRegistry",

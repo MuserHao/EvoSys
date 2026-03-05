@@ -45,7 +45,7 @@ def _mock_forge(succeed: bool = True) -> SkillForge:
     forge = AsyncMock(spec=SkillForge)
     if succeed:
         forge.forge = AsyncMock(
-            side_effect=lambda candidate, domain="": SkillRecord(
+            side_effect=lambda candidate, domain="", **_kw: SkillRecord(
                 skill_id=new_ulid(),
                 name=f"extract:{domain}",
                 description=f"Forged for {domain}",
@@ -246,7 +246,7 @@ class TestShadowEvaluation:
         # Create a forge mock that actually registers the skill
         forge = AsyncMock(spec=SkillForge)
 
-        async def _forge_and_register(candidate, domain=""):
+        async def _forge_and_register(candidate, domain="", **_kw):
             rec = SkillRecord(
                 skill_id=new_ulid(),
                 name=f"extract:{domain}",
@@ -283,7 +283,7 @@ class TestSkillDegradation:
     ) -> AsyncMock:
         forge = AsyncMock(spec=SkillForge)
 
-        async def _forge_and_register(candidate, domain=""):
+        async def _forge_and_register(candidate, domain="", **_kw):
             rec = SkillRecord(
                 skill_id=new_ulid(),
                 name=f"extract:{domain}",

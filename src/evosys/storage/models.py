@@ -34,3 +34,22 @@ class TrajectoryRow(Base):
     __table_args__ = (
         Index("ix_trajectory_session_ts", "session_id", "timestamp_utc"),
     )
+
+
+class MemoryRow(Base):
+    """Persistent key-value memory for the agent across sessions.
+
+    Keys are scoped by an optional namespace (e.g. a user id or task type)
+    so different users or task categories don't collide.
+    """
+
+    __tablename__ = "agent_memory"
+
+    namespace: Mapped[str] = mapped_column(String(256), primary_key=True, default="default")
+    key: Mapped[str] = mapped_column(String(512), primary_key=True)
+    value: Mapped[str] = mapped_column(Text)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+
+    __table_args__ = (
+        Index("ix_memory_namespace", "namespace"),
+    )

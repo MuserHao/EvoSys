@@ -21,6 +21,11 @@ _DEFAULT_SYSTEM_PROMPT = (
     "Only return valid JSON, no commentary."
 )
 
+# Maximum HTML characters stored in the trajectory for skill synthesis.
+# The synthesizer truncates to 2 000 chars per example anyway, but we keep
+# more here so future improvements can use the fuller context.
+_HTML_STORE_LIMIT = 50_000
+
 
 @dataclass(frozen=True, slots=True)
 class ExtractionResult:
@@ -172,7 +177,11 @@ class ExtractionAgent:
             await self._logger.log(
                 action_name="llm_extract",
                 context_summary=f"LLM extraction from {url}",
-                action_params={"target_schema": target_schema},
+                action_params={
+                    "url": url,
+                    "html": html[:_HTML_STORE_LIMIT],
+                    "target_schema": target_schema,
+                },
                 action_result={"error": str(exc)},
             )
             raise ExtractionError(f"LLM failed: {exc}") from exc
@@ -184,7 +193,11 @@ class ExtractionAgent:
             await self._logger.log(
                 action_name="llm_extract",
                 context_summary=f"LLM extraction from {url}",
-                action_params={"target_schema": target_schema},
+                action_params={
+                    "url": url,
+                    "html": html[:_HTML_STORE_LIMIT],
+                    "target_schema": target_schema,
+                },
                 action_result={"error": f"Invalid JSON: {exc}", "raw": llm_resp.content},
                 token_cost=llm_resp.total_tokens,
                 latency_ms=llm_latency,
@@ -194,7 +207,11 @@ class ExtractionAgent:
         await self._logger.log(
             action_name="llm_extract",
             context_summary=f"LLM extraction from {url}",
-            action_params={"target_schema": target_schema},
+            action_params={
+                "url": url,
+                "html": html[:_HTML_STORE_LIMIT],
+                "target_schema": target_schema,
+            },
             action_result=data,
             token_cost=llm_resp.total_tokens,
             latency_ms=llm_latency,

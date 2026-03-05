@@ -21,6 +21,7 @@ from evosys.orchestration.routing_orchestrator import RoutingOrchestrator
 from evosys.skills.loader import register_builtin_skills
 from evosys.skills.registry import SkillRegistry
 from evosys.storage.engine import dispose_engine, init_engine, make_session_factory
+from evosys.storage.memory_store import MemoryStore
 from evosys.storage.trajectory_store import TrajectoryStore
 from evosys.tools.builtins import (
     ExtractStructuredTool,
@@ -28,6 +29,8 @@ from evosys.tools.builtins import (
     FileReadTool,
     FileWriteTool,
     PythonEvalTool,
+    RecallTool,
+    RememberTool,
     ShellExecTool,
     WebFetchTool,
 )
@@ -46,6 +49,7 @@ class EvoSysRuntime:
     engine: AsyncEngine
     session_factory: async_sessionmaker[AsyncSession]
     trajectory_store: TrajectoryStore
+    memory_store: MemoryStore
     trajectory_logger: TrajectoryLogger
     llm: LLMClient
     http_executor: HttpExecutor
@@ -86,6 +90,7 @@ async def bootstrap(
     engine = await init_engine(cfg.db_url)
     session_factory = make_session_factory(engine)
     trajectory_store = TrajectoryStore(session_factory)
+    memory_store = MemoryStore(session_factory)
     trajectory_logger = TrajectoryLogger(trajectory_store)
 
     llm = LLMClient(
@@ -132,6 +137,8 @@ async def bootstrap(
     tool_registry.register_external(FileReadTool())
     tool_registry.register_external(FileWriteTool())
     tool_registry.register_external(FileListTool())
+    tool_registry.register_external(RememberTool(memory_store))
+    tool_registry.register_external(RecallTool(memory_store))
     # ShellExecTool and PythonEvalTool execute arbitrary code/commands — only
     # register them when explicitly opted-in via config or env var.
     if cfg.enable_shell_tool:
@@ -173,6 +180,7 @@ async def bootstrap(
         engine=engine,
         session_factory=session_factory,
         trajectory_store=trajectory_store,
+        memory_store=memory_store,
         trajectory_logger=trajectory_logger,
         llm=llm,
         http_executor=http_executor,

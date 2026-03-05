@@ -16,6 +16,7 @@ from dataclasses import dataclass, field
 import structlog
 from ulid import ULID
 
+from evosys.core.types import IOPair
 from evosys.forge.composite_forge import CompositeForge
 from evosys.forge.forge import SkillForge
 from evosys.reflection.pattern_detector import PatternCandidate, PatternDetector
@@ -130,8 +131,29 @@ class EvolutionLoop:
             )
 
             forge_attempted += 1
+
+            # Build IOPairs from stored trajectory samples.
+            # action_params now contains {"html": ..., "url": ..., "target_schema": ...}
+            # action_result is the structured JSON the LLM produced.
+            # Only include pairs where html is actually present — older records
+            # that predate the data-feed fix will have no html key and are
+            # skipped so the synthesizer isn't misled by empty inputs.
+            sample_io: list[IOPair] = [
+                IOPair(
+                    input_data={
+                        "html": p.get("html", ""),
+                        "url": p.get("url", ""),
+                    },
+                    output_data=dict(r),
+                )
+                for p, r in zip(
+                    pattern.sample_params, pattern.sample_results, strict=False
+                )
+                if p.get("html")
+            ]
+
             record = await self._forge.forge(
-                candidate, domain=pattern.domain
+                candidate, domain=pattern.domain, sample_io=sample_io or None
             )
             if record is not None:
                 # Shadow-evaluate the forged skill; degrade it if agreement

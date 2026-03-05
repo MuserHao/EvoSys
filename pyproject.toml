@@ -44,6 +44,16 @@ dev = [
     "httpx>=0.27",   # needed by httpx.ASGITransport in server tests
 ]
 
+# Install with: uv sync --group browser
+# Playwright-based HTTP fetching for JavaScript-rendered pages (SPAs, React,
+# Vue).  Replaces the plain httpx GET in HttpExecutor for sites that return
+# empty or skeleton HTML without JS execution.  Enable at runtime with the
+# EVOSYS_ENABLE_BROWSER_FETCH=true env var or enable_browser_fetch=True config.
+# After install, run: playwright install chromium
+browser = [
+    "playwright>=1.44",
+]
+
 # Install with: uv sync --group migrations
 # Used when running schema migrations in production (alembic upgrade head).
 # Not needed for development against SQLite with create_all().

@@ -29,6 +29,9 @@ class EvoSysConfig:
     # Disabled by default to avoid accidental destructive operations.
     enable_shell_tool: bool = False
     enable_python_eval_tool: bool = False
+    # Use Playwright for fetching JavaScript-rendered pages.
+    # Requires: uv sync --group browser && playwright install chromium
+    enable_browser_fetch: bool = False
     # Wall-clock timeout for a single agent.run() call (seconds).
     # None means no timeout.
     agent_timeout_s: float | None = None
@@ -61,6 +64,8 @@ class EvoSysConfig:
             kwargs["enable_shell_tool"] = v.lower() in {"1", "true", "yes"}
         if v := os.environ.get("EVOSYS_ENABLE_PYTHON_EVAL_TOOL"):
             kwargs["enable_python_eval_tool"] = v.lower() in {"1", "true", "yes"}
+        if v := os.environ.get("EVOSYS_ENABLE_BROWSER_FETCH"):
+            kwargs["enable_browser_fetch"] = v.lower() in {"1", "true", "yes"}
         if v := os.environ.get("EVOSYS_AGENT_TIMEOUT_S"):
             kwargs["agent_timeout_s"] = float(v)
         return cls(**kwargs)  # type: ignore[arg-type]
