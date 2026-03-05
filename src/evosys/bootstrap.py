@@ -22,16 +22,19 @@ from evosys.skills.loader import register_builtin_skills
 from evosys.skills.registry import SkillRegistry
 from evosys.storage.engine import dispose_engine, init_engine, make_session_factory
 from evosys.storage.memory_store import MemoryStore
+from evosys.storage.schedule_store import ScheduleStore
 from evosys.storage.trajectory_store import TrajectoryStore
 from evosys.tools.builtins import (
     ExtractStructuredTool,
     FileListTool,
     FileReadTool,
     FileWriteTool,
+    InboxTool,
     PythonEvalTool,
     RecallTool,
     RememberTool,
     ShellExecTool,
+    WatchTool,
     WebFetchTool,
 )
 from evosys.tools.mcp import MCPManager, MCPServerConfig
@@ -50,6 +53,7 @@ class EvoSysRuntime:
     session_factory: async_sessionmaker[AsyncSession]
     trajectory_store: TrajectoryStore
     memory_store: MemoryStore
+    schedule_store: ScheduleStore
     trajectory_logger: TrajectoryLogger
     llm: LLMClient
     http_executor: HttpExecutor
@@ -91,6 +95,7 @@ async def bootstrap(
     session_factory = make_session_factory(engine)
     trajectory_store = TrajectoryStore(session_factory)
     memory_store = MemoryStore(session_factory)
+    schedule_store = ScheduleStore(session_factory)
     trajectory_logger = TrajectoryLogger(trajectory_store)
 
     llm = LLMClient(
@@ -101,7 +106,10 @@ async def bootstrap(
     http_executor = HttpExecutor(
         timeout_s=cfg.http_timeout_s,
         max_body_bytes=cfg.http_max_body_bytes,
+        browser_fetch=cfg.enable_browser_fetch,
     )
+    if cfg.enable_browser_fetch:
+        log.info("bootstrap.browser_fetch_enabled")
 
     skill_registry = SkillRegistry()
     if load_builtin_skills:
@@ -139,6 +147,8 @@ async def bootstrap(
     tool_registry.register_external(FileListTool())
     tool_registry.register_external(RememberTool(memory_store))
     tool_registry.register_external(RecallTool(memory_store))
+    tool_registry.register_external(WatchTool(schedule_store))
+    tool_registry.register_external(InboxTool(schedule_store))
     # ShellExecTool and PythonEvalTool execute arbitrary code/commands — only
     # register them when explicitly opted-in via config or env var.
     if cfg.enable_shell_tool:
@@ -181,6 +191,7 @@ async def bootstrap(
         session_factory=session_factory,
         trajectory_store=trajectory_store,
         memory_store=memory_store,
+        schedule_store=schedule_store,
         trajectory_logger=trajectory_logger,
         llm=llm,
         http_executor=http_executor,

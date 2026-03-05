@@ -33,6 +33,7 @@ log = structlog.get_logger()
 _runtime: EvoSysRuntime | None = None
 _evolution_loop: EvolutionLoop | None = None
 _evolution_task: asyncio.Task[None] | None = None
+_scheduler_task: asyncio.Task[None] | None = None
 _last_evolve_result: EvolveCycleResult | None = None
 _total_evolve_cycles: int = 0
 _total_skills_forged: int = 0
@@ -131,6 +132,54 @@ async def _evolution_worker(
             log.exception("serve.evolution_error")
 
 
+async def _scheduler_worker(tick_seconds: float = 60.0) -> None:
+    """Run due scheduled tasks in the background.
+
+    Every *tick_seconds* the worker checks for tasks whose next_run_at has
+    passed, runs each as a full agent.run() call, and stores the result.
+    The answer is also written to agent_memory so users can retrieve it
+    with the 'inbox' or 'recall' tools.
+    """
+    import orjson
+
+    while True:
+        await asyncio.sleep(tick_seconds)
+
+        if _runtime is None:
+            continue
+
+        try:
+            due = await _runtime.schedule_store.get_due()
+            for task_row in due:
+                try:
+                    result = await _runtime.general_agent.run(task_row.description)
+                    payload: dict[str, object] = {
+                        "answer": result.answer,
+                        "task": task_row.description,
+                        "session_id": result.session_id,
+                        "total_tokens": result.total_tokens,
+                    }
+                    await _runtime.schedule_store.record_result(
+                        task_row.task_id, payload
+                    )
+                    # Also store in memory so recall tool can surface it
+                    await _runtime.memory_store.set(
+                        f"watch:{task_row.task_id}:latest",
+                        orjson.dumps(payload).decode(),
+                    )
+                    log.info(
+                        "scheduler.task_ran",
+                        task_id=task_row.task_id,
+                        tokens=result.total_tokens,
+                    )
+                except Exception:
+                    log.exception(
+                        "scheduler.task_failed", task_id=task_row.task_id
+                    )
+        except Exception:
+            log.exception("scheduler.worker_error")
+
+
 # ---------------------------------------------------------------------------
 # Lifespan
 # ---------------------------------------------------------------------------
@@ -139,7 +188,7 @@ async def _evolution_worker(
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Bootstrap EvoSys on startup, tear down on shutdown."""
-    global _runtime, _evolution_loop, _evolution_task
+    global _runtime, _evolution_loop, _evolution_task, _scheduler_task
 
     cfg = EvoSysConfig.from_env()
     _runtime = await bootstrap(cfg)
@@ -154,6 +203,9 @@ async def lifespan(app: FastAPI):
         _evolution_worker(interval_seconds=300, min_frequency=3)
     )
 
+    # Start scheduled task runner (checks for due tasks every 60 seconds)
+    _scheduler_task = asyncio.create_task(_scheduler_worker(tick_seconds=60.0))
+
     log.info(
         "serve.started",
         skills=len(_runtime.skill_registry),
@@ -163,10 +215,11 @@ async def lifespan(app: FastAPI):
     yield
 
     # Shutdown
-    if _evolution_task is not None:
-        _evolution_task.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await _evolution_task
+    for task in (_evolution_task, _scheduler_task):
+        if task is not None:
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
 
     if _runtime is not None:
         await _runtime.shutdown()

@@ -2,7 +2,7 @@
 
 These wrap existing EvoSys components (HttpExecutor, ExtractionAgent) so
 the agent loop can call them as standard tools.  System tools (shell, file
-I/O, Python eval) and memory tools are also provided as direct implementations.
+I/O, Python eval), memory tools, and scheduling tools are provided here.
 """
 
 from __future__ import annotations
@@ -18,6 +18,7 @@ from evosys.schemas._types import new_ulid
 
 if TYPE_CHECKING:
     from evosys.storage.memory_store import MemoryStore
+    from evosys.storage.schedule_store import ScheduleStore
 
 
 class WebFetchTool:
@@ -478,6 +479,187 @@ class FileListTool:
             },
         }
 
+
+# ---------------------------------------------------------------------------
+# Scheduling tools — recurring agent tasks
+# ---------------------------------------------------------------------------
+
+
+class WatchTool:
+    """Schedule the agent to run a task repeatedly on an interval.
+
+    Use this when the user wants to be notified about something over time:
+    price changes, news updates, stock levels, new job postings, etc.
+    The agent will run the task description as a new agent request on
+    every tick.  Results are stored and can be retrieved with the
+    'inbox' tool.
+
+    Examples:
+      watch("Check if the price of Sonos Era 100 on Amazon is below $200",
+            interval_hours=6)
+      watch("Look for new Python developer jobs in San Francisco on LinkedIn",
+            interval_hours=24)
+    """
+
+    def __init__(self, schedule_store: ScheduleStore) -> None:
+        self._store = schedule_store
+
+    @property
+    def name(self) -> str:
+        return "watch"
+
+    @property
+    def description(self) -> str:
+        return (
+            "Schedule a task to run repeatedly at a set interval. "
+            "The agent will execute the task description on every tick and "
+            "store the result. Use 'inbox' to check for updates. "
+            "Useful for price tracking, monitoring news, checking availability."
+        )
+
+    @property
+    def parameters_schema(self) -> dict[str, object]:
+        return {
+            "task": {
+                "type": "string",
+                "description": "What to check or look for (plain language task description)",
+            },
+            "interval_hours": {
+                "type": "number",
+                "description": (
+                    "How often to run the task, in hours"
+                    " (e.g. 6 for every 6 hours)"
+                ),
+            },
+        }
+
+    async def __call__(self, **kwargs: object) -> dict[str, object]:
+        task = str(kwargs.get("task", "")).strip()
+        interval_hours = float(str(kwargs.get("interval_hours", 24)))
+        if not task:
+            return {"error": "task must not be empty"}
+        if interval_hours <= 0:
+            return {"error": "interval_hours must be positive"}
+        interval_seconds = int(interval_hours * 3600)
+        task_id = await self._store.create(task, interval_seconds)
+        return {
+            "task_id": task_id,
+            "task": task,
+            "interval_hours": interval_hours,
+            "status": "scheduled",
+            "message": (
+                f"Watching every {interval_hours:.0f}h. "
+                "Use the 'inbox' tool to check for results."
+            ),
+        }
+
+    def to_openai_tool(self) -> dict[str, object]:
+        return {
+            "type": "function",
+            "function": {
+                "name": self.name,
+                "description": self.description,
+                "parameters": {
+                    "type": "object",
+                    "properties": self.parameters_schema,
+                    "required": ["task", "interval_hours"],
+                },
+            },
+        }
+
+
+class InboxTool:
+    """Check results from scheduled watch tasks.
+
+    Returns the latest result from each active watch task, or the
+    result for a specific task if a task_id is provided.
+    """
+
+    def __init__(self, schedule_store: ScheduleStore) -> None:
+        self._store = schedule_store
+
+    @property
+    def name(self) -> str:
+        return "inbox"
+
+    @property
+    def description(self) -> str:
+        return (
+            "Check for results from scheduled watch tasks. "
+            "Without arguments, lists all active watches and their latest results. "
+            "Pass a task_id to get the latest result for a specific watch."
+        )
+
+    @property
+    def parameters_schema(self) -> dict[str, object]:
+        return {
+            "task_id": {
+                "type": "string",
+                "description": "Optional task_id to check a specific watch",
+            },
+        }
+
+    async def __call__(self, **kwargs: object) -> dict[str, object]:
+        import orjson
+
+        task_id = str(kwargs.get("task_id", "")).strip()
+
+        if task_id:
+            row = await self._store.get(task_id)
+            if row is None:
+                return {"error": f"No watch task found with id: {task_id}"}
+            result = orjson.loads(row.last_result_json) if row.last_result_json else {}
+            return {
+                "task_id": row.task_id,
+                "task": row.description,
+                "last_run_at": (
+                    row.last_run_at.isoformat() if row.last_run_at else None
+                ),
+                "next_run_at": row.next_run_at.isoformat(),
+                "enabled": row.enabled,
+                "result": result,
+            }
+
+        rows = await self._store.list_enabled()
+        if not rows:
+            return {
+                "watches": [],
+                "count": 0,
+                "message": "No active watches. Use 'watch' to set one up.",
+            }
+
+        watches = []
+        for row in rows:
+            result = orjson.loads(row.last_result_json) if row.last_result_json else None
+            watches.append({
+                "task_id": row.task_id,
+                "task": row.description,
+                "interval_hours": row.interval_seconds / 3600,
+                "last_run_at": (
+                    row.last_run_at.isoformat() if row.last_run_at else None
+                ),
+                "next_run_at": row.next_run_at.isoformat(),
+                "has_result": result is not None,
+                "latest_answer": (
+                    result.get("answer", "")[:200]
+                    if isinstance(result, dict) else ""
+                ),
+            })
+        return {"watches": watches, "count": len(watches)}
+
+    def to_openai_tool(self) -> dict[str, object]:
+        return {
+            "type": "function",
+            "function": {
+                "name": self.name,
+                "description": self.description,
+                "parameters": {
+                    "type": "object",
+                    "properties": self.parameters_schema,
+                    "required": [],
+                },
+            },
+        }
 
 class PythonEvalTool:
     """Run Python code in a subprocess and return stdout/stderr."""

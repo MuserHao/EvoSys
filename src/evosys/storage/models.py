@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import DateTime, Float, Index, Integer, String, Text
+from sqlalchemy import Boolean, DateTime, Float, Index, Integer, String, Text
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -37,11 +37,7 @@ class TrajectoryRow(Base):
 
 
 class MemoryRow(Base):
-    """Persistent key-value memory for the agent across sessions.
-
-    Keys are scoped by an optional namespace (e.g. a user id or task type)
-    so different users or task categories don't collide.
-    """
+    """Persistent key-value memory for the agent across sessions."""
 
     __tablename__ = "agent_memory"
 
@@ -53,3 +49,27 @@ class MemoryRow(Base):
     __table_args__ = (
         Index("ix_memory_namespace", "namespace"),
     )
+
+
+class ScheduledTaskRow(Base):
+    """A user-defined task the agent runs on a recurring schedule.
+
+    The agent executes *description* as a plain-language task and stores
+    the answer in *last_result_json*.  Results are also written to the
+    agent_memory table under ``alert:{task_id}:latest`` so the user can
+    retrieve them with the recall tool.
+    """
+
+    __tablename__ = "scheduled_tasks"
+
+    task_id: Mapped[str] = mapped_column(String(26), primary_key=True)
+    description: Mapped[str] = mapped_column(Text)
+    interval_seconds: Mapped[int] = mapped_column(Integer)
+    next_run_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    last_run_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    last_result_json: Mapped[str] = mapped_column(Text, default="")
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+

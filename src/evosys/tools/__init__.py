@@ -5,10 +5,12 @@ from evosys.tools.builtins import (
     FileListTool,
     FileReadTool,
     FileWriteTool,
+    InboxTool,
     PythonEvalTool,
     RecallTool,
     RememberTool,
     ShellExecTool,
+    WatchTool,
     WebFetchTool,
 )
 from evosys.tools.mcp import MCPManager, MCPServerConfig, MCPToolWrapper
@@ -20,6 +22,7 @@ __all__ = [
     "FileListTool",
     "FileReadTool",
     "FileWriteTool",
+    "InboxTool",
     "MCPManager",
     "MCPServerConfig",
     "MCPToolWrapper",
@@ -29,5 +32,6 @@ __all__ = [
     "ShellExecTool",
     "SkillToolAdapter",
     "ToolRegistry",
+    "WatchTool",
     "WebFetchTool",
 ]
