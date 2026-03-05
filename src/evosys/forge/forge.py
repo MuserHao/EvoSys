@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import ast
 import types
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import structlog
 
@@ -15,6 +15,9 @@ from evosys.schemas._types import ImplementationType, MaturationStage, new_ulid
 from evosys.schemas.skill import SkillRecord
 from evosys.schemas.slice import SliceCandidate
 from evosys.skills.registry import SkillRegistry
+
+if TYPE_CHECKING:
+    from evosys.storage.skill_store import SkillStore
 
 log = structlog.get_logger()
 
@@ -40,6 +43,7 @@ class SkillForge(BaseForge):
     2. Validate the code is safe (AST check, no imports of dangerous modules).
     3. Execute against sample I/O pairs to verify correctness.
     4. If pass rate is sufficient, create a SkillRecord and register it.
+    5. Persist the record and source code to the DB so it survives restarts.
     """
 
     def __init__(
@@ -48,10 +52,12 @@ class SkillForge(BaseForge):
         registry: SkillRegistry,
         *,
         min_pass_rate: float = 0.8,
+        skill_store: SkillStore | None = None,
     ) -> None:
         self._synthesizer = synthesizer
         self._registry = registry
         self._min_pass_rate = min_pass_rate
+        self._skill_store = skill_store
 
     async def forge(
         self,
@@ -149,6 +155,16 @@ class SkillForge(BaseForge):
         except ValueError as exc:
             log.warning("forge.register_failed", error=str(exc))
             return None
+
+        # 6. Persist to DB so the skill survives restarts
+        if self._skill_store is not None:
+            try:
+                await self._skill_store.save(record, code)
+                log.info("forge.persisted", skill_name=skill_name)
+            except Exception as exc:
+                # Persistence failure is non-fatal: skill is live in memory
+                # and will be re-forged on the next evolution cycle if lost.
+                log.warning("forge.persist_failed", skill_name=skill_name, error=str(exc))
 
         log.info(
             "forge.success",

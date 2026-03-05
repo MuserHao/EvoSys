@@ -12,6 +12,7 @@ A single ``evolve_cycle`` call:
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 
 import structlog
 from ulid import ULID
@@ -28,6 +29,9 @@ from evosys.schemas.slice import SliceCandidate
 from evosys.skills.registry import SkillRegistry
 from evosys.storage.trajectory_store import TrajectoryStore
 from evosys.tools.registry import ToolRegistry
+
+if TYPE_CHECKING:
+    from evosys.storage.skill_store import SkillStore
 
 log = structlog.get_logger()
 
@@ -64,6 +68,7 @@ class EvolutionLoop:
         sequence_detector: SequenceDetector | None = None,
         shadow_degradation_threshold: float = 0.5,
         max_forge_per_cycle: int = 5,
+        skill_store: SkillStore | None = None,
     ) -> None:
         self._store = store
         self._forge = forge
@@ -81,6 +86,7 @@ class EvolutionLoop:
         # Cap LLM synthesis calls per cycle to bound API cost.
         # Patterns above the cap are deferred to the next cycle.
         self._max_forge_per_cycle = max_forge_per_cycle
+        self._skill_store = skill_store
 
     async def run_cycle(self) -> EvolveCycleResult:
         """Execute one evolution cycle and return a summary."""
@@ -280,5 +286,20 @@ class EvolutionLoop:
                 agreement_rate=agreement_rate,
                 comparisons=total_comparisons,
             )
+
+        # Persist the updated metrics and status back to the DB.
+        if self._skill_store is not None:
+            try:
+                await self._skill_store.update_shadow(
+                    record.name, agreement_rate, total_comparisons
+                )
+                if degraded:
+                    await self._skill_store.update_status(
+                        record.name, SkillStatus.DEGRADED
+                    )
+            except Exception:
+                log.warning(
+                    "evolve.shadow_persist_failed", skill_name=record.name
+                )
 
         return degraded

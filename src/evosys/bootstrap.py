@@ -23,6 +23,7 @@ from evosys.skills.registry import SkillRegistry
 from evosys.storage.engine import dispose_engine, init_engine, make_session_factory
 from evosys.storage.memory_store import MemoryStore
 from evosys.storage.schedule_store import ScheduleStore
+from evosys.storage.skill_store import SkillStore
 from evosys.storage.trajectory_store import TrajectoryStore
 from evosys.tools.builtins import (
     ExtractStructuredTool,
@@ -54,6 +55,7 @@ class EvoSysRuntime:
     trajectory_store: TrajectoryStore
     memory_store: MemoryStore
     schedule_store: ScheduleStore
+    skill_store: SkillStore
     trajectory_logger: TrajectoryLogger
     llm: LLMClient
     http_executor: HttpExecutor
@@ -96,6 +98,7 @@ async def bootstrap(
     trajectory_store = TrajectoryStore(session_factory)
     memory_store = MemoryStore(session_factory)
     schedule_store = ScheduleStore(session_factory)
+    skill_store = SkillStore(session_factory)
     trajectory_logger = TrajectoryLogger(trajectory_store)
 
     llm = LLMClient(
@@ -114,6 +117,14 @@ async def bootstrap(
     skill_registry = SkillRegistry()
     if load_builtin_skills:
         register_builtin_skills(skill_registry)
+
+    # Reload forged skills persisted from previous runs.
+    # Built-in skills already registered above take precedence — any DB row
+    # whose name collides with a builtin is silently skipped.
+    reloaded = await _reload_forged_skills(skill_store, skill_registry)
+    if reloaded:
+        log.info("bootstrap.skills_reloaded", count=reloaded)
+
     skill_executor = SkillExecutor(skill_registry)
     routing_orchestrator = RoutingOrchestrator(
         registry=skill_registry,
@@ -129,9 +140,9 @@ async def bootstrap(
     )
 
     synthesizer = SkillSynthesizer(llm)
-    forge = SkillForge(synthesizer, skill_registry)
+    forge = SkillForge(synthesizer, skill_registry, skill_store=skill_store)
     evolution_loop = EvolutionLoop(
-        trajectory_store, forge, skill_registry
+        trajectory_store, forge, skill_registry, skill_store=skill_store
     )
 
     # Tool registry + built-in tools
@@ -192,6 +203,7 @@ async def bootstrap(
         trajectory_store=trajectory_store,
         memory_store=memory_store,
         schedule_store=schedule_store,
+        skill_store=skill_store,
         trajectory_logger=trajectory_logger,
         llm=llm,
         http_executor=http_executor,
@@ -206,3 +218,48 @@ async def bootstrap(
         general_agent=general_agent,
         mcp_manager=mcp_manager,
     )
+
+
+async def _reload_forged_skills(
+    skill_store: SkillStore,
+    registry: SkillRegistry,
+) -> int:
+    """Reload previously forged skills from the DB into *registry*.
+
+    Each persisted skill's source code is recompiled through the same
+    ``_compile_extract`` path used by :class:`SkillForge`.  Skills whose
+    name is already taken (built-ins loaded first) are silently skipped.
+    Rows with corrupted code or incompatible schemas are skipped too —
+    they will be re-forged naturally on the next evolution cycle.
+
+    Returns the number of skills successfully reloaded.
+    """
+    from evosys.forge.forge import _compile_extract, _SynthesizedSkill
+
+    persisted = await skill_store.load_all()
+    reloaded = 0
+
+    for ps in persisted:
+        if ps.record.name in registry:
+            # Built-in or already registered — skip without warning
+            continue
+        if not ps.source_code:
+            continue
+
+        extract_fn = _compile_extract(ps.source_code)
+        if extract_fn is None:
+            log.warning(
+                "bootstrap.skill_recompile_failed",
+                skill_name=ps.record.name,
+            )
+            continue
+
+        skill = _SynthesizedSkill(extract_fn)
+        try:
+            registry.register(ps.record, skill)
+            reloaded += 1
+        except ValueError:
+            # Shouldn't happen given the name check above, but be safe
+            pass
+
+    return reloaded

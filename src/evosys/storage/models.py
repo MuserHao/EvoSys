@@ -52,13 +52,7 @@ class MemoryRow(Base):
 
 
 class ScheduledTaskRow(Base):
-    """A user-defined task the agent runs on a recurring schedule.
-
-    The agent executes *description* as a plain-language task and stores
-    the answer in *last_result_json*.  Results are also written to the
-    agent_memory table under ``alert:{task_id}:latest`` so the user can
-    retrieve them with the recall tool.
-    """
+    """A user-defined task the agent runs on a recurring schedule."""
 
     __tablename__ = "scheduled_tasks"
 
@@ -72,4 +66,25 @@ class ScheduledTaskRow(Base):
     last_result_json: Mapped[str] = mapped_column(Text, default="")
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class SkillRow(Base):
+    """Persisted forged skill — survives process restarts.
+
+    Hand-crafted built-in skills (HackerNews, GitHub, etc.) are reloaded
+    from Python source on every startup and are NOT stored here.  Only
+    skills synthesized by :class:`SkillForge` at runtime are persisted.
+
+    *source_code* is the raw Python string produced by :class:`SkillSynthesizer`.
+    On reload it is compiled through ``_compile_extract`` and re-registered
+    in the :class:`SkillRegistry`, restoring the full in-memory entry.
+    """
+
+    __tablename__ = "forged_skills"
+
+    name: Mapped[str] = mapped_column(String(256), primary_key=True)
+    record_json: Mapped[str] = mapped_column(Text)   # orjson-serialised SkillRecord
+    source_code: Mapped[str] = mapped_column(Text)   # synthesized Python source
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
