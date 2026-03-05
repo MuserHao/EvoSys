@@ -30,10 +30,12 @@ from evosys.tools.builtins import (
     FileListTool,
     FileReadTool,
     FileWriteTool,
+    HttpApiTool,
     InboxTool,
     PythonEvalTool,
     RecallTool,
     RememberTool,
+    SendEmailTool,
     ShellExecTool,
     WatchTool,
     WebFetchTool,
@@ -160,6 +162,12 @@ async def bootstrap(
     tool_registry.register_external(RecallTool(memory_store))
     tool_registry.register_external(WatchTool(schedule_store))
     tool_registry.register_external(InboxTool(schedule_store))
+    tool_registry.register_external(HttpApiTool())
+    # SendEmailTool only registers when SMTP is configured — self-checks env vars
+    email_tool = SendEmailTool()
+    if email_tool._is_configured():
+        tool_registry.register_external(email_tool)
+        log.info("bootstrap.email_tool_enabled")
     # ShellExecTool and PythonEvalTool execute arbitrary code/commands — only
     # register them when explicitly opted-in via config or env var.
     if cfg.enable_shell_tool:

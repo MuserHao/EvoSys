@@ -152,7 +152,25 @@ async def _scheduler_worker(tick_seconds: float = 60.0) -> None:
             due = await _runtime.schedule_store.get_due()
             for task_row in due:
                 try:
-                    result = await _runtime.general_agent.run(task_row.description)
+                    # Load the previous result into context so the agent can
+                    # detect changes and avoid repeating the same answer.
+                    prior_json = task_row.last_result_json
+                    context: dict[str, object] | None = None
+                    if prior_json:
+                        try:
+                            prior = orjson.loads(prior_json)
+                            context = {
+                                "watch_task_id": task_row.task_id,
+                                "previous_answer": prior.get("answer", ""),
+                                "previous_run": task_row.last_run_at.isoformat()
+                                if task_row.last_run_at else None,
+                            }
+                        except Exception:
+                            pass
+
+                    result = await _runtime.general_agent.run(
+                        task_row.description, context=context
+                    )
                     payload: dict[str, object] = {
                         "answer": result.answer,
                         "task": task_row.description,

@@ -60,6 +60,7 @@ class WebFetchTool:
                 "html": str(obs.result.get("html", "")),
                 "status_code": obs.result.get("status_code", 0),
                 "url": str(obs.result.get("url", url)),
+                "fetch_method": str(obs.result.get("fetch_method", "httpx")),
             }
         return {"error": obs.error or "Unknown error"}
 
@@ -475,6 +476,217 @@ class FileListTool:
                     "type": "object",
                     "properties": self.parameters_schema,
                     "required": [],
+                },
+            },
+        }
+
+
+# ---------------------------------------------------------------------------
+# External action tools — HTTP API calls and email
+# ---------------------------------------------------------------------------
+
+
+class HttpApiTool:
+    """Make HTTP requests with custom method, headers, and body.
+
+    Use this to call REST APIs, webhooks, or any HTTP endpoint.
+    Supports POST, PUT, PATCH, DELETE (and GET for completeness).
+    Returns the response status code and body.
+
+    Examples:
+      http_api(method="POST", url="https://api.example.com/items",
+               body={"name": "widget"}, headers={"Authorization": "Bearer TOKEN"})
+      http_api(method="DELETE", url="https://api.example.com/items/42")
+    """
+
+    def __init__(self, timeout_s: float = 30.0) -> None:
+        self._timeout_s = timeout_s
+
+    @property
+    def name(self) -> str:
+        return "http_api"
+
+    @property
+    def description(self) -> str:
+        return (
+            "Make an HTTP request to an API endpoint. Supports POST, PUT, "
+            "PATCH, DELETE, GET. Use for sending data to APIs, triggering "
+            "webhooks, or interacting with REST services."
+        )
+
+    @property
+    def parameters_schema(self) -> dict[str, object]:
+        return {
+            "method": {
+                "type": "string",
+                "description": "HTTP method: GET, POST, PUT, PATCH, DELETE",
+            },
+            "url": {
+                "type": "string",
+                "description": "The URL to call",
+            },
+            "body": {
+                "type": "object",
+                "description": "Request body (sent as JSON)",
+            },
+            "headers": {
+                "type": "object",
+                "description": "Additional HTTP headers",
+            },
+        }
+
+    async def __call__(self, **kwargs: object) -> dict[str, object]:
+        import httpx as _httpx
+
+        method = str(kwargs.get("method", "POST")).upper()
+        url = str(kwargs.get("url", ""))
+        body = kwargs.get("body")
+        headers = kwargs.get("headers")
+
+        if not url:
+            return {"error": "url must not be empty"}
+        if method not in {"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD"}:
+            return {"error": f"Unsupported method: {method}"}
+
+        req_headers: dict[str, str] = {}
+        if isinstance(headers, dict):
+            req_headers = {str(k): str(v) for k, v in headers.items()}
+
+        try:
+            async with _httpx.AsyncClient(follow_redirects=True) as client:
+                resp = await client.request(
+                    method,
+                    url,
+                    json=body if body is not None else None,
+                    headers=req_headers or None,
+                    timeout=self._timeout_s,
+                )
+            # Try to parse response as JSON, fall back to text
+            try:
+                import json as _json
+                response_body: object = _json.loads(resp.text)
+            except Exception:
+                response_body = resp.text[:10_000]
+            return {
+                "status_code": resp.status_code,
+                "ok": resp.is_success,
+                "body": response_body,
+                "url": str(resp.url),
+            }
+        except Exception as exc:
+            return {"error": str(exc)}
+
+    def to_openai_tool(self) -> dict[str, object]:
+        return {
+            "type": "function",
+            "function": {
+                "name": self.name,
+                "description": self.description,
+                "parameters": {
+                    "type": "object",
+                    "properties": self.parameters_schema,
+                    "required": ["method", "url"],
+                },
+            },
+        }
+
+
+class SendEmailTool:
+    """Send an email via SMTP.
+
+    Requires SMTP configuration via environment variables:
+      EVOSYS_SMTP_HOST, EVOSYS_SMTP_PORT (default 587)
+      EVOSYS_SMTP_USER, EVOSYS_SMTP_PASSWORD
+      EVOSYS_SMTP_FROM (sender address)
+
+    Use this to send notifications, alerts, or summaries.
+    """
+
+    def __init__(self) -> None:
+        import os
+        self._host = os.environ.get("EVOSYS_SMTP_HOST", "")
+        self._port = int(os.environ.get("EVOSYS_SMTP_PORT", "587"))
+        self._user = os.environ.get("EVOSYS_SMTP_USER", "")
+        self._password = os.environ.get("EVOSYS_SMTP_PASSWORD", "")
+        self._from_addr = os.environ.get("EVOSYS_SMTP_FROM", self._user)
+
+    @property
+    def name(self) -> str:
+        return "send_email"
+
+    @property
+    def description(self) -> str:
+        return (
+            "Send an email. Use for notifications, alerts, and summaries. "
+            "Requires EVOSYS_SMTP_* environment variables to be configured."
+        )
+
+    @property
+    def parameters_schema(self) -> dict[str, object]:
+        return {
+            "to": {
+                "type": "string",
+                "description": "Recipient email address",
+            },
+            "subject": {
+                "type": "string",
+                "description": "Email subject line",
+            },
+            "body": {
+                "type": "string",
+                "description": "Email body (plain text)",
+            },
+        }
+
+    def _is_configured(self) -> bool:
+        return bool(self._host and self._user and self._password)
+
+    async def __call__(self, **kwargs: object) -> dict[str, object]:
+        if not self._is_configured():
+            return {
+                "error": (
+                    "SMTP not configured. Set EVOSYS_SMTP_HOST, "
+                    "EVOSYS_SMTP_USER, EVOSYS_SMTP_PASSWORD environment variables."
+                )
+            }
+
+        to = str(kwargs.get("to", "")).strip()
+        subject = str(kwargs.get("subject", "(no subject)"))
+        body = str(kwargs.get("body", ""))
+
+        if not to:
+            return {"error": "to must not be empty"}
+
+        import smtplib
+        from email.mime.text import MIMEText
+
+        def _send() -> None:
+            msg = MIMEText(body)
+            msg["Subject"] = subject
+            msg["From"] = self._from_addr
+            msg["To"] = to
+            with smtplib.SMTP(self._host, self._port) as smtp:
+                smtp.ehlo()
+                smtp.starttls()
+                smtp.login(self._user, self._password)
+                smtp.sendmail(self._from_addr, [to], msg.as_string())
+
+        try:
+            await asyncio.to_thread(_send)
+            return {"sent": True, "to": to, "subject": subject}
+        except Exception as exc:
+            return {"error": str(exc)}
+
+    def to_openai_tool(self) -> dict[str, object]:
+        return {
+            "type": "function",
+            "function": {
+                "name": self.name,
+                "description": self.description,
+                "parameters": {
+                    "type": "object",
+                    "properties": self.parameters_schema,
+                    "required": ["to", "subject", "body"],
                 },
             },
         }

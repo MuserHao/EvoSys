@@ -139,7 +139,7 @@ class TestRun:
 
         captured_cfg: list[EvoSysConfig] = []
 
-        async def fake_run_agent(cfg: EvoSysConfig, task: str):
+        async def fake_run_agent(cfg: EvoSysConfig, task: str, **_kw: object):
             captured_cfg.append(cfg)
             return fake_result
 
@@ -163,7 +163,7 @@ class TestRun:
                                    total_latency_ms=1.0, session_id="s", iterations=1)
         captured_cfg: list[EvoSysConfig] = []
 
-        async def fake_run_agent(cfg: EvoSysConfig, task: str):
+        async def fake_run_agent(cfg: EvoSysConfig, task: str, **_kw: object):
             captured_cfg.append(cfg)
             return fake_result
 
@@ -184,7 +184,7 @@ class TestRun:
                                    total_latency_ms=1.0, session_id="s", iterations=1)
         captured_cfg: list[EvoSysConfig] = []
 
-        async def fake_run_agent(cfg: EvoSysConfig, task: str):
+        async def fake_run_agent(cfg: EvoSysConfig, task: str, **_kw: object):
             captured_cfg.append(cfg)
             return fake_result
 

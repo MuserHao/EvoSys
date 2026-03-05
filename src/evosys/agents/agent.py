@@ -121,8 +121,16 @@ class Agent:
             # If no tool calls, we have the final answer
             if not resp.tool_calls:
                 total_latency = (time.monotonic() - t0) * 1000
+                answer = resp.content or ""
+                # Log synthetic llm_extract records for any web_fetch calls
+                # made this session so the evolution loop can mine them for
+                # domain skill forging — closing the learning gap between the
+                # general agent and the extraction agent.
+                await self._log_web_fetches_as_extractions(
+                    all_tool_calls, all_tool_results, answer, session_id
+                )
                 return AgentResult(
-                    answer=resp.content or "",
+                    answer=answer,
                     tool_calls_made=all_tool_calls,
                     tool_results=all_tool_results,
                     total_tokens=total_tokens,
@@ -267,3 +275,42 @@ class Agent:
             )
         except Exception:
             log.exception("agent.log_failed", tool_name=tool_call.tool_name)
+
+    async def _log_web_fetches_as_extractions(
+        self,
+        tool_calls: list[ToolCall],
+        tool_results: list[ToolResult],
+        answer: str,
+        session_id: str,
+    ) -> None:
+        """Log synthetic llm_extract records for web_fetch calls.
+
+        When the general agent fetches a URL and produces an answer, we log
+        the fetch as an ``llm_extract`` action so the evolution loop can mine
+        it for domain skill forging — identical to how ExtractionAgent works.
+        Only logs for successful web_fetch calls that returned real HTML.
+        """
+        for tc, tr in zip(tool_calls, tool_results, strict=False):
+            if tc.tool_name != "web_fetch":
+                continue
+            if not tr.success:
+                continue
+            html = str(tr.result.get("html", "")) if tr.result else ""
+            url = str(tc.arguments.get("url", ""))
+            # Skip empty or tiny pages — not worth forging a skill for
+            if len(html) < 500 or not url:
+                continue
+            try:
+                await self._logger.log(
+                    action_name="llm_extract",
+                    context_summary=f"LLM extraction from {url}",
+                    action_params={
+                        "url": url,
+                        "html": html[:50_000],
+                        "target_schema": "{}",
+                    },
+                    action_result={"answer": answer[:2000]},
+                    latency_ms=tr.latency_ms,
+                )
+            except Exception:
+                log.exception("agent.web_fetch_extract_log_failed", url=url)

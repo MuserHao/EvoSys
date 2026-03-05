@@ -11,6 +11,7 @@ import typer
 from rich.console import Console
 from rich.table import Table
 
+from evosys.agents.agent import AgentResult
 from evosys.agents.extraction_agent import ExtractionResult
 from evosys.bootstrap import bootstrap
 from evosys.config import EvoSysConfig
@@ -54,21 +55,35 @@ def run_task(
         "--no-python",
         help="Disable Python code execution.",
     ),
+    browser: bool = typer.Option(
+        False,
+        "--browser",
+        help="Use a headless browser for web fetching (requires playwright).",
+    ),
+    session: str = typer.Option(
+        "",
+        "--session",
+        help="Session name to load prior memory context from.",
+    ),
 ) -> None:
     """Run the general-purpose agent on a task.
 
     Shell and Python execution are enabled by default for local use.
     Use --no-shell or --no-python to restrict the agent's capabilities.
+    Use --browser for JavaScript-rendered sites
+    (requires: uv sync --group browser && playwright install chromium).
+    Use --session NAME to carry over memory from a previous named session.
     """
     cfg = EvoSysConfig(
         db_url=db_url,
         agent_max_iterations=max_iterations,
         enable_shell_tool=not no_shell,
         enable_python_eval_tool=not no_python,
+        enable_browser_fetch=browser,
     )
 
     try:
-        result = asyncio.run(_run_agent(cfg, task))
+        result = asyncio.run(_run_agent(cfg, task, session=session))
     except Exception as exc:
         console.print(f"[red]Agent failed:[/red] {exc}")
         raise typer.Exit(code=1) from exc
@@ -95,11 +110,23 @@ def run_task(
         sys.stdout.write(json.dumps(output, default=str, indent=2) + "\n")
 
 
-async def _run_agent(cfg: EvoSysConfig, task: str):
-
+async def _run_agent(cfg: EvoSysConfig, task: str, *, session: str = "") -> AgentResult:
     runtime = await bootstrap(cfg)
     try:
-        return await runtime.general_agent.run(task=task)
+        context: dict[str, object] | None = None
+        if session:
+            # Load all keys from the named session namespace into context so
+            # the agent starts with prior memory without explicit recall calls.
+            keys = await runtime.memory_store.list_keys(namespace=session)
+            if keys:
+                remembered: dict[str, object] = {}
+                for key in keys:
+                    val = await runtime.memory_store.get(key, namespace=session)
+                    if val is not None:
+                        remembered[key] = val
+                if remembered:
+                    context = {"session": session, "memory": remembered}
+        return await runtime.general_agent.run(task=task, context=context)
     finally:
         await runtime.shutdown()
 
