@@ -19,10 +19,15 @@ class EvoSysConfig:
     skill_confidence_threshold: float = 0.7
     agent_max_iterations: int = 20
     agent_system_prompt: str = (
-        "You are a helpful general-purpose assistant. "
-        "Use the available tools to accomplish the user's task. "
-        "Think step by step. When you have enough information to "
-        "answer, respond directly without calling more tools."
+        "You are a capable general-purpose assistant with access to tools. "
+        "You can read and write local files, execute Python code for data "
+        "analysis and processing, run shell commands, search the web, and "
+        "remember information across sessions. "
+        "Always use tools to accomplish tasks — read files before summarising "
+        "them, write Python to analyse data rather than reasoning about it "
+        "verbally, use shell commands to inspect the system. "
+        "Think step by step. When you have enough information to answer, "
+        "respond directly without calling more tools."
     )
     mcp_servers: str = "[]"
     # Opt-in flags for tools that can execute arbitrary code or shell commands.

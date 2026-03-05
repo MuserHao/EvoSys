@@ -44,9 +44,28 @@ def run_task(
         "--max-iter",
         help="Maximum agent loop iterations.",
     ),
+    no_shell: bool = typer.Option(
+        False,
+        "--no-shell",
+        help="Disable shell command execution.",
+    ),
+    no_python: bool = typer.Option(
+        False,
+        "--no-python",
+        help="Disable Python code execution.",
+    ),
 ) -> None:
-    """Run the general-purpose agent on a task."""
-    cfg = EvoSysConfig(db_url=db_url, agent_max_iterations=max_iterations)
+    """Run the general-purpose agent on a task.
+
+    Shell and Python execution are enabled by default for local use.
+    Use --no-shell or --no-python to restrict the agent's capabilities.
+    """
+    cfg = EvoSysConfig(
+        db_url=db_url,
+        agent_max_iterations=max_iterations,
+        enable_shell_tool=not no_shell,
+        enable_python_eval_tool=not no_python,
+    )
 
     try:
         result = asyncio.run(_run_agent(cfg, task))
