@@ -1,6 +1,6 @@
 # EvoSys
 
-A self-evolving general-purpose agent that gets faster and cheaper the more it's used. The system observes its own tool usage, detects recurring patterns, and autonomously forges optimized compound skills — replacing expensive multi-step LLM tool-call loops with direct skill invocations.
+A self-evolving general-purpose agent that gets faster and cheaper the more it's used. The system observes its own tool usage, detects recurring patterns, and autonomously forges optimized skills — replacing expensive multi-step LLM tool-call loops with direct skill invocations.
 
 ## How It Works
 
@@ -20,9 +20,10 @@ User task  ──►  Agent  ──►  LLM decides tools  ──►  Execute to
                                               └──────────┬──────────┘
                                                          │
                                               Next request: $0, ~0ms
+                                              Skill persisted to DB ✓
 ```
 
-Standard agents are stateless tool-callers. EvoSys learns from its own operation: extraction patterns become deterministic skills, recurring tool-call sequences become composite skills. Both bypass the LLM entirely on subsequent requests.
+Standard agents are stateless tool-callers. EvoSys learns from its own operation: extraction patterns become deterministic skills, recurring tool-call sequences become composite skills. Both bypass the LLM entirely on subsequent requests. Forged skills persist across restarts.
 
 ## Quick Start
 
@@ -40,15 +41,36 @@ uv sync          # or: pip install -e ".[dev]"
 
 ### Run
 
-**General-purpose agent** (new — handles arbitrary tasks):
+**General-purpose agent** (shell + Python enabled by default):
 
 ```bash
 evosys run "What is the top story on Hacker News right now?"
-evosys run "Fetch https://example.com and summarize the content"
-evosys run "Extract the title and author from https://dev.to/some-article" -f json
+evosys run "Read ~/data/sales.csv and show me total revenue by month"
+evosys run "Find all Python files in this project larger than 100 lines"
+evosys run "Fetch https://arxiv.org/abs/2106.09685 and summarize the paper"
 ```
 
-**Extract data from a URL** (original extraction pipeline):
+**With browser rendering** (for JavaScript-heavy sites):
+
+```bash
+uv sync --group browser && playwright install chromium
+evosys run --browser "What is the price of the Sony WH-1000XM5 on Amazon?"
+```
+
+**With session memory** (carry context across runs):
+
+```bash
+evosys run --session work "Remember: my budget for headphones is $200"
+evosys run --session work "Find noise-cancelling headphones within my budget"
+```
+
+**Restrict capabilities** (for untrusted input or CI):
+
+```bash
+evosys run --no-shell --no-python "Summarize this Wikipedia article"
+```
+
+**Extract structured data** (dedicated extraction pipeline):
 
 ```bash
 evosys extract https://news.ycombinator.com
@@ -67,7 +89,7 @@ evosys serve --evolve-interval 60     # evolve every 60s instead of 5min
 The server exposes:
 - `POST /extract` — extract structured data from a URL
 - `POST /agent/run` — run the general-purpose agent on any task
-- `GET /skills` — list all registered skills
+- `GET /skills` — list all registered skills (with live invocation counts)
 - `GET /status` — system health and evolution metrics
 - `POST /evolve` — manually trigger an evolution cycle
 
@@ -94,7 +116,11 @@ All settings are configurable via environment variables:
 | `EVOSYS_HTTP_TIMEOUT_S` | `30` | HTTP fetch timeout |
 | `EVOSYS_SKILL_CONFIDENCE_THRESHOLD` | `0.7` | Min confidence to route to a skill |
 | `EVOSYS_AGENT_MAX_ITERATIONS` | `20` | Max agent loop iterations |
-| `EVOSYS_AGENT_SYSTEM_PROMPT` | (built-in) | Custom system prompt for the agent |
+| `EVOSYS_AGENT_TIMEOUT_S` | (none) | Wall-clock timeout per agent run |
+| `EVOSYS_ENABLE_SHELL_TOOL` | `false` | Enable shell (server mode; CLI defaults to true) |
+| `EVOSYS_ENABLE_PYTHON_EVAL_TOOL` | `false` | Enable Python eval (server mode; CLI defaults to true) |
+| `EVOSYS_ENABLE_BROWSER_FETCH` | `false` | Use Playwright for JS-rendered pages |
+| `EVOSYS_SMTP_HOST` / `_USER` / `_PASSWORD` | (none) | SMTP config for email notifications |
 | `EVOSYS_MCP_SERVERS` | `[]` | MCP server configs as JSON |
 
 ### MCP Integration
@@ -110,70 +136,113 @@ evosys serve
 
 ```
 src/evosys/
-├── agents/          # Agent (general-purpose), ExtractionAgent (URL extraction)
-├── tools/           # Tool protocol, ToolRegistry, SkillToolAdapter, builtins, MCP
+├── agents/          # Agent (ReAct loop), ExtractionAgent (URL→JSON)
+├── tools/           # 13 built-in tools, Tool protocol, ToolRegistry, MCP adapter
 ├── orchestration/   # RoutingOrchestrator (domain-based skill lookup)
-├── executors/       # HttpExecutor, SkillExecutor
-├── skills/          # SkillRegistry, built-in skills (HN, Wikipedia, article metadata)
+├── executors/       # HttpExecutor (httpx + Playwright), SkillExecutor
+├── skills/          # SkillRegistry, 8 skill classes, 34 registered domains
 ├── forge/           # SkillForge (extraction), CompositeForge (tool sequences)
 ├── reflection/      # PatternDetector, SequenceDetector, ShadowEvaluator
-├── storage/         # SQLAlchemy models, TrajectoryStore
+├── storage/         # TrajectoryStore, MemoryStore, ScheduleStore, SkillStore
 ├── trajectory/      # TrajectoryLogger, PII sanitizer
 ├── llm/             # LiteLLM wrapper with tool-calling support
 ├── loop.py          # EvolutionLoop (dual path: domains + tool sequences)
-├── server.py        # FastAPI server with background evolution
-├── bootstrap.py     # Runtime wiring
+├── server.py        # FastAPI server with background evolution + scheduler
+├── bootstrap.py     # Runtime wiring + forged skill reload
 ├── cli.py           # Typer CLI
 └── config.py        # Environment-based configuration
 ```
 
 **Two evolution paths:**
 
-1. **Domain-based** (Phases 0-4): Extract request → Router checks skill registry → miss → LLM extraction → log trajectory → detect recurring domains → forge extraction skill → register
-2. **Sequence-based** (Phase 9): Agent runs tasks → logs tool calls → detect recurring tool sequences (A→B→C) → forge composite skill that chains tools → register
+1. **Domain-based** — Extraction requests to the same domain 3+ times → forge a deterministic skill → register → route future requests at $0
+2. **Sequence-based** — Recurring tool-call patterns (A→B→C) across sessions → forge composite skill → register → skip LLM planning
+
+**Learning loop for both agent types:**
+
+The general agent's `web_fetch` calls now log synthetic `llm_extract` records, so the evolution loop learns from *all* web interactions — not just the dedicated extraction pipeline.
+
+## Built-in Tools
+
+| Tool | Description | Default |
+|------|-------------|---------|
+| `web_fetch` | Fetch a URL (httpx or Playwright) | Always on |
+| `extract_structured` | Extract structured data via skills/LLM | Always on |
+| `file_read` / `file_write` / `file_list` | Local file operations | Always on |
+| `remember` / `recall` | Cross-session persistent memory | Always on |
+| `watch` / `inbox` | Schedule recurring tasks, check results | Always on |
+| `http_api` | Call REST APIs (POST/PUT/DELETE/GET) | Always on |
+| `send_email` | Send email via SMTP | When SMTP configured |
+| `shell_exec` | Execute shell commands | CLI: on, Server: opt-in |
+| `python_eval` | Execute Python code | CLI: on, Server: opt-in |
 
 ## Built-in Skills
 
-Ships with 7 hand-crafted Tier 0 skills (regex/html.parser, no LLM):
+34 registered domains across 8 skill classes:
 
-| Skill | Domain |
-|-------|--------|
-| HackerNewsSkill | `news.ycombinator.com` |
-| WikipediaSummarySkill | `en.wikipedia.org` |
-| ArticleMetadataSkill | `medium.com`, `dev.to`, `techcrunch.com`, `arstechnica.com`, `theverge.com` |
+| Skill | Domains | What it extracts |
+|-------|---------|-----------------|
+| HackerNewsSkill | `news.ycombinator.com` | title, score, author, comments |
+| WikipediaSummarySkill | `en.wikipedia.org` | title, first paragraph, categories |
+| GitHubRepoSkill | `github.com` | name, description, stars, forks, language, license, topics |
+| ArxivPaperSkill | `arxiv.org` | title, authors, abstract, submission date, subjects |
+| RedditThreadSkill | `old.reddit.com`, `www.reddit.com` | title, subreddit, score, top comments |
+| RecipeSkill | 8 recipe sites | name, ingredients, times, servings, calories (schema.org) |
+| ProductPageSkill | 6 shopping sites | name, price, rating, availability (schema.org) |
+| ArticleMetadataSkill | 14 news/blog sites | title, description, author, date (og: + meta) |
 
-Built-in agent tools: `web_fetch` (HTTP fetcher), `extract_structured` (wraps ExtractionAgent). All registered skills are also available as agent tools.
+Plus any skills the system forges at runtime from observed patterns.
 
 ## Development
 
 ```bash
 uv sync --group dev          # install dev dependencies
-pytest tests/ -v             # run tests (442 tests)
+pytest tests/ -v             # run tests (564 tests)
 ruff check src/ tests/       # lint
 pyright src/evosys/          # type check
 ```
 
-## Current Status
+Optional groups:
+```bash
+uv sync --group browser           # Playwright for JS-rendered pages
+uv sync --group forge-sandbox     # RestrictedPython + jsonschema for safer forge
+uv sync --group skill-clustering  # sentence-transformers + HDBSCAN for semantic patterns
+uv sync --group migrations        # Alembic for production schema migrations
+```
 
-Phases 0-9 implemented and tested (442 tests, ruff clean, pyright 0 errors):
+## Current Status (v0.1.0)
 
-- **Phase 0** — Data contracts, interface ABCs, PII sanitizer
-- **Phase 1** — Extraction pipeline (URL → HTML → LLM → JSON → SQLite), skill registry, domain-based routing, CLI, built-in skills
-- **Phase 2** — Reflection daemon, frequency-based pattern detection, shadow evaluator
-- **Phase 3** — LLM code synthesis, AST safety validation, skill forge pipeline
-- **Phase 4** — Evolution loop, FastAPI server with background evolution
-- **Phase 5** — Tool abstraction layer (Tool protocol, SkillToolAdapter, ToolRegistry)
-- **Phase 6** — LLM tool calling (complete_with_tools, multi-provider via LiteLLM)
-- **Phase 7** — General agent loop (ReAct-style, arbitrary tasks, trajectory logging)
-- **Phase 8** — MCP integration (connect external MCP servers, surface tools to agent)
-- **Phase 9** — Self-evolution on tool usage (SequenceDetector, CompositeForge, dual evolution paths)
+**564 tests, ruff clean, pyright 0 errors.**
 
-### Not yet implemented
+### Implemented
+
+- **ReAct agent loop** — general-purpose task execution with 13 tools
+- **Self-evolution loop** — observe → detect patterns → forge skills → persist to DB
+- **Skill persistence** — forged skills survive restarts; source code stored and recompiled on bootstrap
+- **34 built-in extraction skills** — deterministic parsing for common domains (recipes, products, news, academic papers, GitHub, Reddit)
+- **Cross-session memory** — `remember`/`recall` with namespace isolation
+- **Scheduled monitoring** — `watch`/`inbox` with background scheduler
+- **Browser rendering** — Playwright path for JavaScript-heavy sites (opt-in)
+- **External actions** — HTTP API calls and email notifications
+- **Shadow evaluation** — compare forged skills against LLM ground truth; degrade on drift
+- **Safety** — AST-checked forge code, opt-in dangerous tools, PII sanitizer, request timeouts
+- **Learning from both agents** — general agent web fetches feed the evolution loop
+
+### Not Yet Implemented
 
 - Embedding-based semantic routing (currently domain-exact-match)
 - HDBSCAN clustering (currently frequency-based grouping)
 - Docker/WASM sandboxing for forged skills
-- Confidence decay and skill lifecycle management
 - Federation (cross-instance skill sharing)
 - Streaming responses
+- Multi-user authentication and isolation
+- Push notifications (email tool exists, but no automated alert-on-change)
 - Observability dashboard UI
+
+### Stretch Goals
+
+See [Thought 010](thoughts/010-stretch-goals.md) for the full roadmap beyond v0.1.
+
+## License
+
+MIT
