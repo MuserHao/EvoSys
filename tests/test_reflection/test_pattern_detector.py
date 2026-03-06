@@ -10,6 +10,7 @@ from evosys.schemas.trajectory import TrajectoryRecord
 def _make_record(
     domain: str = "example.com",
     result: dict[str, object] | None = None,
+    success: bool = True,
 ) -> TrajectoryRecord:
     return TrajectoryRecord(
         session_id=new_ulid(),
@@ -18,6 +19,7 @@ def _make_record(
         action_name="llm_extract",
         action_params={"target_schema": "{}"},
         action_result=result or {"title": "Test"},
+        success=success,
     )
 
 
@@ -73,3 +75,29 @@ class TestDetect:
     def test_empty_input(self):
         detector = PatternDetector(min_frequency=3)
         assert detector.detect({}) == []
+
+    def test_failed_records_excluded(self):
+        """Failed records should be filtered out before counting frequency."""
+        records = {
+            "example.com": [
+                _make_record(success=True),
+                _make_record(success=True),
+                _make_record(success=True),
+                _make_record(success=False),
+                _make_record(success=False),
+            ],
+        }
+        detector = PatternDetector(min_frequency=3)
+        candidates = detector.detect(records)
+        assert len(candidates) == 1
+        # Only 3 successful records should be counted
+        assert candidates[0].frequency == 3
+
+    def test_all_failed_records_excluded(self):
+        """Domain with only failed records should not produce candidates."""
+        records = {
+            "fail.com": [_make_record("fail.com", success=False) for _ in range(5)],
+        }
+        detector = PatternDetector(min_frequency=3)
+        candidates = detector.detect(records)
+        assert len(candidates) == 0

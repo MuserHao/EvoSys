@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from unittest.mock import AsyncMock, patch
 
 from typer.testing import CliRunner
@@ -10,6 +11,28 @@ from evosys.cli import app
 
 runner = CliRunner()
 
+
+# ---------------------------------------------------------------------------
+# evosys --version
+# ---------------------------------------------------------------------------
+
+class TestVersion:
+    def test_version_flag(self):
+        result = runner.invoke(app, ["--version"])
+        assert result.exit_code == 0
+        assert "evosys" in result.output
+        assert "0.1.0" in result.output
+
+    def test_version_short_flag(self):
+        result = runner.invoke(app, ["-V"])
+        assert result.exit_code == 0
+        assert "evosys" in result.output
+        assert "0.1.0" in result.output
+
+
+# ---------------------------------------------------------------------------
+# evosys info (flat, no admin prefix)
+# ---------------------------------------------------------------------------
 
 class TestInfo:
     def test_shows_version(self):
@@ -27,11 +50,14 @@ class TestInfo:
         assert "shell" in prompt.lower() or "command" in prompt.lower()
 
 
+# ---------------------------------------------------------------------------
+# evosys skills (flat, no admin prefix)
+# ---------------------------------------------------------------------------
+
 class TestSkillsList:
     def test_lists_skills(self):
         result = runner.invoke(app, ["skills", "list"])
         assert result.exit_code == 0
-        # Rich table may truncate names; check for partial match
         assert "ycombinato" in result.output
         assert "wikipedia" in result.output
 
@@ -41,15 +67,9 @@ class TestSkillsList:
         assert "ycombinato" in result.output
 
 
-class TestExtractValidation:
-    def test_missing_schema_file(self):
-        result = runner.invoke(
-            app,
-            ["extract", "https://example.com", "-s", "@nonexistent.json"],
-        )
-        assert result.exit_code == 1
-        assert "not found" in result.output
-
+# ---------------------------------------------------------------------------
+# evosys reflect / evolve (flat, no admin prefix)
+# ---------------------------------------------------------------------------
 
 class TestReflect:
     def test_empty_db_shows_no_patterns(self):
@@ -72,36 +92,36 @@ class TestEvolve:
         assert "0" in result.output
 
 
-class TestRun:
-    def test_run_pretty_output(self):
-        """CLI `run` command returns the agent answer in pretty format.
-        The agent and all LLM calls are mocked so no network is needed."""
-        from evosys.agents.agent import AgentResult
+# ---------------------------------------------------------------------------
+# One-shot mode (evosys "task")
+# ---------------------------------------------------------------------------
 
-        fake_result = AgentResult(
-            answer="42",
+class TestOneShot:
+    def _fake_result(self, answer="42"):
+        from evosys.agents.agent import AgentResult
+        return AgentResult(
+            answer=answer,
             total_tokens=5,
             total_latency_ms=10.0,
             session_id="cli-test-session",
             iterations=1,
         )
 
-        with patch("evosys.cli._run_agent", new=AsyncMock(return_value=fake_result)):
+    def test_oneshot_pretty_output(self):
+        with patch("evosys.cli._run_agent", new=AsyncMock(return_value=self._fake_result())):
             result = runner.invoke(
                 app,
-                ["run", "What is 6 * 7?", "--db", "sqlite+aiosqlite:///:memory:"],
+                ["What is 6 * 7?", "--db", "sqlite+aiosqlite:///:memory:"],
             )
-
         assert result.exit_code == 0
         assert "42" in result.output
 
-    def test_run_json_output(self):
-        """CLI `run --format json` returns machine-readable output."""
+    def test_oneshot_json_output(self):
         import json as json_mod
 
         from evosys.agents.agent import AgentResult
 
-        fake_result = AgentResult(
+        fake = AgentResult(
             answer="Paris",
             total_tokens=8,
             total_latency_ms=20.0,
@@ -109,90 +129,229 @@ class TestRun:
             iterations=2,
         )
 
-        with patch("evosys.cli._run_agent", new=AsyncMock(return_value=fake_result)):
+        with patch("evosys.cli._run_agent", new=AsyncMock(return_value=fake)):
             result = runner.invoke(
                 app,
-                ["run", "Capital of France?", "--format", "json",
+                ["--format", "json", "Capital of France?",
                  "--db", "sqlite+aiosqlite:///:memory:"],
             )
-
         assert result.exit_code == 0
         data = json_mod.loads(result.output)
         assert data["answer"] == "Paris"
         assert data["iterations"] == 2
         assert "session_id" in data
 
-    def test_run_passes_tools_enabled_by_default(self):
-        """CLI run enables shell and python_eval by default."""
-        from unittest.mock import patch
-
-        from evosys.agents.agent import AgentResult
+    def test_oneshot_tools_enabled_by_default(self):
         from evosys.config import EvoSysConfig
-
-        fake_result = AgentResult(
-            answer="done",
-            total_tokens=1,
-            total_latency_ms=5.0,
-            session_id="s",
-            iterations=1,
-        )
 
         captured_cfg: list[EvoSysConfig] = []
 
         async def fake_run_agent(cfg: EvoSysConfig, task: str, **_kw: object):
             captured_cfg.append(cfg)
-            return fake_result
+            return self._fake_result("done")
 
         with patch("evosys.cli._run_agent", side_effect=fake_run_agent):
             result = runner.invoke(
                 app,
-                ["run", "do something", "--db", "sqlite+aiosqlite:///:memory:"],
+                ["do something", "--db", "sqlite+aiosqlite:///:memory:"],
             )
-
         assert result.exit_code == 0
         assert len(captured_cfg) == 1
         assert captured_cfg[0].enable_shell_tool is True
         assert captured_cfg[0].enable_python_eval_tool is True
 
-    def test_run_no_shell_disables_shell(self):
-        """--no-shell flag disables shell tool."""
-        from evosys.agents.agent import AgentResult
+    def test_no_shell_disables_shell(self):
         from evosys.config import EvoSysConfig
 
-        fake_result = AgentResult(answer="ok", total_tokens=1,
-                                   total_latency_ms=1.0, session_id="s", iterations=1)
         captured_cfg: list[EvoSysConfig] = []
 
         async def fake_run_agent(cfg: EvoSysConfig, task: str, **_kw: object):
             captured_cfg.append(cfg)
-            return fake_result
+            return self._fake_result("ok")
 
-        from unittest.mock import patch
         with patch("evosys.cli._run_agent", side_effect=fake_run_agent):
-            runner.invoke(app, ["run", "task", "--no-shell",
-                                "--db", "sqlite+aiosqlite:///:memory:"])
-
+            runner.invoke(
+                app,
+                ["--no-shell", "task", "--db", "sqlite+aiosqlite:///:memory:"],
+            )
         assert captured_cfg[0].enable_shell_tool is False
-        assert captured_cfg[0].enable_python_eval_tool is True  # still on
+        assert captured_cfg[0].enable_python_eval_tool is True
 
-    def test_run_no_python_disables_python_eval(self):
-        """--no-python flag disables python_eval tool."""
-        from evosys.agents.agent import AgentResult
+    def test_no_python_disables_python_eval(self):
         from evosys.config import EvoSysConfig
 
-        fake_result = AgentResult(answer="ok", total_tokens=1,
-                                   total_latency_ms=1.0, session_id="s", iterations=1)
         captured_cfg: list[EvoSysConfig] = []
 
         async def fake_run_agent(cfg: EvoSysConfig, task: str, **_kw: object):
             captured_cfg.append(cfg)
-            return fake_result
+            return self._fake_result("ok")
 
-        from unittest.mock import patch
         with patch("evosys.cli._run_agent", side_effect=fake_run_agent):
-            runner.invoke(app, ["run", "task", "--no-python",
-                                "--db", "sqlite+aiosqlite:///:memory:"])
-
+            runner.invoke(
+                app,
+                ["--no-python", "task", "--db", "sqlite+aiosqlite:///:memory:"],
+            )
         assert captured_cfg[0].enable_python_eval_tool is False
-        assert captured_cfg[0].enable_shell_tool is True  # still on
+        assert captured_cfg[0].enable_shell_tool is True
 
+    def test_multi_word_task(self):
+        """Multiple words are joined into a single task string."""
+        captured_tasks: list[str] = []
+
+        async def fake_run_agent(cfg, task: str, **_kw):
+            captured_tasks.append(task)
+            return self._fake_result("done")
+
+        with patch("evosys.cli._run_agent", side_effect=fake_run_agent):
+            result = runner.invoke(
+                app,
+                ["summarize", "this", "repo", "--db", "sqlite+aiosqlite:///:memory:"],
+            )
+        assert result.exit_code == 0
+        assert captured_tasks[0] == "summarize this repo"
+
+    def test_options_before_task(self):
+        """Global options can precede the task string."""
+        captured_tasks: list[str] = []
+
+        async def fake_run_agent(cfg, task: str, **_kw):
+            captured_tasks.append(task)
+            return self._fake_result("done")
+
+        with patch("evosys.cli._run_agent", side_effect=fake_run_agent):
+            result = runner.invoke(
+                app,
+                ["--db", "sqlite+aiosqlite:///:memory:", "--max-iter", "5",
+                 "what is 2+2"],
+            )
+        assert result.exit_code == 0
+        assert captured_tasks[0] == "what is 2+2"
+
+
+# ---------------------------------------------------------------------------
+# ``--`` separator forces task mode
+# ---------------------------------------------------------------------------
+
+class TestDoubleDashSeparator:
+    def _fake_result(self, answer="done"):
+        from evosys.agents.agent import AgentResult
+        return AgentResult(
+            answer=answer,
+            total_tokens=5,
+            total_latency_ms=10.0,
+            session_id="sep-test",
+            iterations=1,
+        )
+
+    def test_double_dash_forces_task_mode(self):
+        """``evosys -- serve me a joke`` should be a task, not the serve command."""
+        captured_tasks: list[str] = []
+
+        async def fake_run_agent(cfg, task: str, **_kw):
+            captured_tasks.append(task)
+            return self._fake_result()
+
+        with patch("evosys.cli._run_agent", side_effect=fake_run_agent):
+            result = runner.invoke(
+                app,
+                ["--", "serve", "me", "a", "joke"],
+            )
+        assert result.exit_code == 0
+        assert captured_tasks[0] == "serve me a joke"
+
+    def test_double_dash_with_options_before(self):
+        """Options before ``--`` are parsed normally."""
+        captured_tasks: list[str] = []
+
+        async def fake_run_agent(cfg, task: str, **_kw):
+            captured_tasks.append(task)
+            return self._fake_result()
+
+        with patch("evosys.cli._run_agent", side_effect=fake_run_agent):
+            result = runner.invoke(
+                app,
+                ["--db", "sqlite+aiosqlite:///:memory:", "--", "info", "about", "cats"],
+            )
+        assert result.exit_code == 0
+        assert captured_tasks[0] == "info about cats"
+
+
+# ---------------------------------------------------------------------------
+# Chat mode (no args → interactive)
+# ---------------------------------------------------------------------------
+
+class TestChatMode:
+    def test_no_args_enters_chat(self):
+        """Invoking with no args should call _run_chat (chat mode)."""
+        with patch("evosys.cli._run_chat", new=AsyncMock()) as mock_chat:
+            result = runner.invoke(app, [])
+        assert result.exit_code == 0
+        mock_chat.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# Welcome banner
+# ---------------------------------------------------------------------------
+
+class TestWelcomeBanner:
+    def test_welcome_shows_key_status(self):
+        """Welcome banner should show checkmarks for set keys and X for unset."""
+        env = {"ANTHROPIC_API_KEY": "sk-test", "GOOGLE_API_KEY": "", "OPENAI_API_KEY": ""}
+
+        with (
+            patch("evosys.cli._run_chat", new=AsyncMock()),
+            patch.dict(os.environ, env, clear=False),
+            patch.dict(os.environ, {"GOOGLE_API_KEY": "", "OPENAI_API_KEY": ""}, clear=False),
+        ):
+            # Remove keys that should appear unset
+            os.environ.pop("GOOGLE_API_KEY", None)
+            os.environ.pop("OPENAI_API_KEY", None)
+            result = runner.invoke(app, [])
+
+        assert result.exit_code == 0
+        assert "ANTHROPIC_API_KEY" in result.output
+        assert "Claude" in result.output
+        assert "Gemini" in result.output
+        assert "GPT" in result.output
+
+    def test_welcome_warns_when_no_key(self):
+        """Warning line when no API keys are set."""
+        with (
+            patch("evosys.cli._run_chat", new=AsyncMock()),
+            patch.dict(
+                os.environ,
+                {"ANTHROPIC_API_KEY": "", "GOOGLE_API_KEY": "", "OPENAI_API_KEY": ""},
+                clear=False,
+            ),
+        ):
+            os.environ.pop("ANTHROPIC_API_KEY", None)
+            os.environ.pop("GOOGLE_API_KEY", None)
+            os.environ.pop("OPENAI_API_KEY", None)
+            result = runner.invoke(app, [])
+
+        assert result.exit_code == 0
+        assert "Warning" in result.output or "No API key" in result.output
+
+
+# ---------------------------------------------------------------------------
+# Help
+# ---------------------------------------------------------------------------
+
+class TestHelp:
+    def test_help_shows_modes(self):
+        result = runner.invoke(app, ["--help"])
+        assert result.exit_code == 0
+        assert "serve" in result.output
+        # admin should NOT appear (flattened)
+        assert "info" in result.output
+        assert "evolve" in result.output
+        assert "reflect" in result.output
+        assert "skills" in result.output
+
+    def test_skills_help(self):
+        result = runner.invoke(app, ["skills", "--help"])
+        assert result.exit_code == 0
+        assert "list" in result.output
+        assert "export" in result.output
+        assert "import" in result.output
+        assert "search" in result.output

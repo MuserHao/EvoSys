@@ -58,6 +58,7 @@ class SkillForge(BaseForge):
         self._registry = registry
         self._min_pass_rate = min_pass_rate
         self._skill_store = skill_store
+        self.last_forge_error: str = ""
 
     async def forge(
         self,
@@ -72,6 +73,7 @@ class SkillForge(BaseForge):
         """
         if not domain:
             log.warning("forge.no_domain", candidate_id=str(candidate.candidate_id))
+            self.last_forge_error = "no domain provided"
             return None
 
         skill_name = f"extract:{domain}"
@@ -92,17 +94,20 @@ class SkillForge(BaseForge):
             )
         except Exception as exc:
             log.error("forge.synthesis_failed", error=str(exc))
+            self.last_forge_error = f"synthesis failed: {exc}"
             return None
 
         # 2. Validate code safety
         if not _is_safe_code(code):
             log.warning("forge.unsafe_code", domain=domain)
+            self.last_forge_error = "unsafe code detected"
             return None
 
         # 3. Compile and load
         extract_fn = _compile_extract(code)
         if extract_fn is None:
             log.warning("forge.compile_failed", domain=domain)
+            self.last_forge_error = "compile failed"
             return None
 
         # 4. Test against I/O pairs
@@ -124,6 +129,7 @@ class SkillForge(BaseForge):
                 domain=domain,
                 pass_rate=pass_rate,
             )
+            self.last_forge_error = f"low pass rate: {pass_rate:.2f}"
             return None
 
         # 5. Create and register

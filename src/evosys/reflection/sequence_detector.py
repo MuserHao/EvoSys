@@ -54,11 +54,59 @@ class SequenceDetector:
         records: list[TrajectoryRecord],
     ) -> list[SequenceCandidate]:
         """Find recurring tool-call sequences in *records*."""
-        # 1. Group by session
+        # 1. Group by session (skip failed records)
+        sessions: dict[str, list[TrajectoryRecord]] = {}
+        for rec in records:
+            if not rec.success:
+                continue
+            sid = str(rec.session_id)
+            sessions.setdefault(sid, []).append(rec)
+
+        return self._detect_from_sessions(sessions)
+
+    def detect_fallbacks(
+        self,
+        records: list[TrajectoryRecord],
+    ) -> dict[str, str]:
+        """Find A(fail) -> B(success) fallback patterns.
+
+        Returns {failed_tool: fallback_tool} for patterns that appear
+        at least ``min_frequency`` times across sessions.
+
+        Requires the ``success`` field on TrajectoryRecord (Step 2).
+        """
+        # Group all records by session
         sessions: dict[str, list[TrajectoryRecord]] = {}
         for rec in records:
             sid = str(rec.session_id)
             sessions.setdefault(sid, []).append(rec)
+
+        # Count A(fail) -> B(success) pairs across sessions
+        pair_counts: dict[tuple[str, str], int] = {}
+        for recs in sessions.values():
+            sorted_recs = sorted(recs, key=lambda r: r.iteration_index)
+            tool_recs = [
+                r for r in sorted_recs if r.action_name.startswith("tool:")
+            ]
+            seen_in_session: set[tuple[str, str]] = set()
+            for i in range(len(tool_recs) - 1):
+                a, b = tool_recs[i], tool_recs[i + 1]
+                if not a.success and b.success:
+                    pair = (a.action_name, b.action_name)
+                    if pair not in seen_in_session:
+                        seen_in_session.add(pair)
+                        pair_counts[pair] = pair_counts.get(pair, 0) + 1
+
+        return {
+            a: b
+            for (a, b), count in pair_counts.items()
+            if count >= self._min_frequency
+        }
+
+    def _detect_from_sessions(
+        self,
+        sessions: dict[str, list[TrajectoryRecord]],
+    ) -> list[SequenceCandidate]:
 
         # 2. Extract ordered tool sequences per session
         session_sequences: dict[str, list[str]] = {}

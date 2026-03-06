@@ -152,6 +152,7 @@ class TrajectoryStore:
             token_cost=record.token_cost,
             latency_ms=record.latency_ms,
             skill_used=record.skill_used,
+            success=record.success,
         )
 
     @staticmethod
@@ -171,4 +172,5 @@ class TrajectoryStore:
             token_cost=row.token_cost,
             latency_ms=row.latency_ms,
             skill_used=row.skill_used,
+            success=row.success if row.success is not None else True,
         )

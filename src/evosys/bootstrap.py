@@ -15,6 +15,7 @@ from evosys.config import EvoSysConfig
 from evosys.executors.browser_profiles import BrowserProfileManager
 from evosys.executors.http_executor import HttpExecutor
 from evosys.executors.skill_executor import SkillExecutor
+from evosys.forge.failure_tracker import ForgeFailureTracker
 from evosys.forge.forge import SkillForge
 from evosys.forge.synthesizer import SkillSynthesizer
 from evosys.llm.client import LLMClient
@@ -22,6 +23,8 @@ from evosys.llm.embeddings import LiteLLMEmbeddingProvider
 from evosys.llm.router import ModelRouter
 from evosys.loop import EvolutionLoop
 from evosys.orchestration.routing_orchestrator import RoutingOrchestrator
+from evosys.reflection.shadow_evaluator import ShadowEvaluator
+from evosys.reflection.strategy_extractor import StrategyExtractor
 from evosys.skills.loader import register_builtin_skills
 from evosys.skills.registry import SkillRegistry
 from evosys.storage.embedding_store import EmbeddingMemoryStore
@@ -170,7 +173,12 @@ async def bootstrap(
     if reloaded:
         log.info("bootstrap.skills_reloaded", count=reloaded)
 
-    skill_executor = SkillExecutor(skill_registry)
+    skill_executor = SkillExecutor(
+        skill_registry,
+        shadow_evaluator=ShadowEvaluator(),
+        llm=llm,
+        skill_store=skill_store,
+    )
     routing_orchestrator = RoutingOrchestrator(
         registry=skill_registry,
         confidence_threshold=cfg.skill_confidence_threshold,
@@ -186,8 +194,15 @@ async def bootstrap(
 
     synthesizer = SkillSynthesizer(llm)
     forge = SkillForge(synthesizer, skill_registry, skill_store=skill_store)
+    failure_tracker = ForgeFailureTracker(memory_store)
+    strategy_extractor = StrategyExtractor(
+        llm, skill_registry, skill_store=skill_store
+    )
     evolution_loop = EvolutionLoop(
-        trajectory_store, forge, skill_registry, skill_store=skill_store
+        trajectory_store, forge, skill_registry,
+        skill_store=skill_store,
+        failure_tracker=failure_tracker,
+        strategy_extractor=strategy_extractor,
     )
 
     # Tool registry + built-in tools
@@ -223,6 +238,22 @@ async def bootstrap(
     if cfg.enable_python_eval_tool:
         tool_registry.register_external(PythonEvalTool())
         log.info("bootstrap.python_eval_tool_enabled")
+
+    # Claude Code external agent
+    if cfg.enable_claude_code:
+        from evosys.tools.external_agent import ClaudeCodeTool, _find_claude_binary
+        claude_path = cfg.claude_code_path or _find_claude_binary()
+        if claude_path:
+            tool_registry.register_external(ClaudeCodeTool(
+                claude_path=claude_path,
+                timeout_s=cfg.claude_code_timeout_s,
+                max_budget_usd=cfg.claude_code_max_budget_usd,
+                model=cfg.claude_code_model,
+                trajectory_logger=trajectory_logger,
+            ))
+            log.info("bootstrap.claude_code_enabled", path=claude_path)
+        else:
+            log.warning("bootstrap.claude_code_not_found")
 
     # MCP integration
     mcp_manager = MCPManager()

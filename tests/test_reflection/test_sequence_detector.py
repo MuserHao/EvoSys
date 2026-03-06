@@ -20,6 +20,7 @@ def _make_record(
     latency_ms: float = 10.0,
     token_cost: int = 5,
     params: dict[str, object] | None = None,
+    success: bool = True,
 ) -> TrajectoryRecord:
     return TrajectoryRecord(
         session_id=session_id,
@@ -29,6 +30,7 @@ def _make_record(
         latency_ms=latency_ms,
         token_cost=token_cost,
         action_params=params or {},
+        success=success,
     )
 
 
@@ -264,6 +266,26 @@ class TestSequenceDetector:
 
         detector = SequenceDetector(min_frequency=3, min_seq_length=2)
         assert detector.detect(records) == []
+
+    def test_failed_records_excluded_from_sequences(self) -> None:
+        """Failed records should be dropped before sequence detection."""
+        records = []
+        for _ in range(3):
+            sid = ULID()
+            records.extend([
+                _make_record(sid, 0, "tool:a", success=True),
+                _make_record(sid, 1, "tool:b", success=False),  # failure breaks chain
+                _make_record(sid, 2, "tool:c", success=True),
+            ])
+        # With failures filtered, each session has only tool:a, tool:c
+        detector = SequenceDetector(min_frequency=3, min_seq_length=2)
+        candidates = detector.detect(records)
+        # tool:a -> tool:c should be detected (failures removed)
+        found_ac = any(c.tool_sequence == ["tool:a", "tool:c"] for c in candidates)
+        assert found_ac
+        # tool:a -> tool:b should NOT be found
+        found_ab = any(c.tool_sequence == ["tool:a", "tool:b"] for c in candidates)
+        assert not found_ab
 
 
 class TestIsStrictSubsequence:

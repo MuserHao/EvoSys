@@ -29,6 +29,7 @@ class TrajectoryRecord(EvoBaseModel):
     token_cost: int = Field(ge=0, default=0)
     latency_ms: float = Field(ge=0, default=0)
     skill_used: str | None = None
+    success: bool = True
 
     @field_validator("schema_version")
     @classmethod

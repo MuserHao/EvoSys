@@ -67,3 +67,35 @@ class TestSessionIdConsistent:
         logger = TrajectoryLogger(trajectory_store, session_id=custom_sid)
         rec = await logger.log(action_name="a", context_summary="s")
         assert rec.session_id == custom_sid
+
+
+class TestSuccessField:
+    async def test_default_success_is_true(self, trajectory_logger: TrajectoryLogger):
+        rec = await trajectory_logger.log(action_name="a", context_summary="s")
+        assert rec.success is True
+
+    async def test_explicit_success_false(self, trajectory_logger: TrajectoryLogger):
+        rec = await trajectory_logger.log(
+            action_name="a", context_summary="s", success=False
+        )
+        assert rec.success is False
+
+    async def test_success_roundtrips_through_store(
+        self, trajectory_store, trajectory_logger: TrajectoryLogger
+    ):
+        rec = await trajectory_logger.log(
+            action_name="fail_action", context_summary="s", success=False
+        )
+        loaded = await trajectory_store.get_by_trace_id(str(rec.trace_id))
+        assert loaded is not None
+        assert loaded.success is False
+
+    async def test_success_true_roundtrips(
+        self, trajectory_store, trajectory_logger: TrajectoryLogger
+    ):
+        rec = await trajectory_logger.log(
+            action_name="ok_action", context_summary="s", success=True
+        )
+        loaded = await trajectory_store.get_by_trace_id(str(rec.trace_id))
+        assert loaded is not None
+        assert loaded.success is True

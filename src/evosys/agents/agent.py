@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -16,6 +17,9 @@ from evosys.tools.registry import ToolRegistry
 from evosys.trajectory.logger import TrajectoryLogger
 
 log = structlog.get_logger()
+
+# Callback type for tool-call progress notifications
+ToolCallCallback = Callable[[str, bool, float], Any]  # (tool_name, success, latency_ms)
 
 _DEFAULT_SYSTEM_PROMPT = (
     "You are a helpful general-purpose assistant. "
@@ -57,6 +61,7 @@ class Agent:
         max_iterations: int = 20,
         system_prompt: str | None = None,
         timeout_s: float | None = None,
+        on_tool_call: ToolCallCallback | None = None,
     ) -> None:
         self._llm = llm
         self._tool_registry = tool_registry
@@ -64,6 +69,7 @@ class Agent:
         self._max_iterations = max_iterations
         self._system_prompt = system_prompt or _DEFAULT_SYSTEM_PROMPT
         self._timeout_s = timeout_s
+        self._on_tool_call = on_tool_call
 
     async def run(
         self,
@@ -251,6 +257,12 @@ class Agent:
         await self._log_tool_execution(
             tool_call, result, session_id=session_id, task=task
         )
+        if self._on_tool_call is not None:
+            import contextlib
+            with contextlib.suppress(Exception):
+                self._on_tool_call(
+                    tool_call.tool_name, result.success, result.latency_ms
+                )
         return result
 
     async def _log_tool_execution(
@@ -272,6 +284,7 @@ class Agent:
                     else {"error": tool_result.error}
                 ),
                 latency_ms=tool_result.latency_ms,
+                success=tool_result.success,
             )
         except Exception:
             log.exception("agent.log_failed", tool_name=tool_call.tool_name)

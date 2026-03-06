@@ -136,8 +136,39 @@ evosys skills search "recipe"
 ```bash
 evosys reflect              # discover patterns in trajectory data
 evosys evolve               # run one evolution cycle (reflect → forge → register)
+evosys status               # show learning status: skills, trajectories, domains
 evosys info                 # show version and configuration
 ```
+
+**Learn from Claude Code** (even sessions run independently):
+
+```bash
+evosys ingest               # scan ~/.claude/projects/ and import tool calls
+evosys ingest --no-evolve   # import only, skip evolution
+```
+
+This reads every JSONL transcript Claude Code has ever saved — all tool calls (Read, Write, Bash, Edit, Grep, etc.) become trajectory records. The evolution loop can then mine them for patterns. Only new files are processed, so it's safe to run repeatedly.
+
+**Expose skills to Claude Code / Cursor / any MCP client:**
+
+```bash
+evosys mcp-serve            # start MCP server on stdio
+```
+
+Configure in Claude Code's `settings.json`:
+
+```json
+{
+  "mcpServers": {
+    "evosys": {
+      "command": "evosys",
+      "args": ["mcp-serve"]
+    }
+  }
+}
+```
+
+Now Claude Code can call `evosys_extract`, invoke any forged skill, and use `evosys_remember`/`evosys_recall`. Every call logs a trajectory, feeding the evolution loop — your Claude Code sessions make EvoSys smarter automatically.
 
 ### Configuration
 
@@ -171,6 +202,9 @@ All settings are configurable via environment variables:
 | `EVOSYS_LOCAL_MODEL_ENABLED` | `false` | Enable local model routing via Ollama |
 | `EVOSYS_SMTP_HOST` / `_USER` / `_PASSWORD` | (none) | SMTP config for email notifications |
 | `EVOSYS_MCP_SERVERS` | `[]` | MCP server configs as JSON |
+| `EVOSYS_ENABLE_CLAUDE_CODE` | `false` | Enable Claude Code as an agent tool |
+| `EVOSYS_CLAUDE_CODE_TIMEOUT_S` | `300` | Claude Code subprocess timeout |
+| `EVOSYS_CLAUDE_CODE_MAX_BUDGET_USD` | `0` | Per-call cost ceiling (0 = no limit) |
 
 ### LLM Failover
 
@@ -226,23 +260,32 @@ src/evosys/
 ├── orchestration/   # RoutingOrchestrator (domain-based skill lookup)
 ├── executors/       # HttpExecutor (httpx + Playwright), SkillExecutor, BrowserProfiles
 ├── skills/          # SkillRegistry, 8 skill classes, 34 domains, Marketplace
-├── forge/           # SkillForge (extraction), CompositeForge (sequences), Reforger
-├── reflection/      # PatternDetector, SequenceDetector, ShadowEvaluator
+├── forge/           # SkillForge (extraction), CompositeForge (sequences + branching), Reforger, FailureTracker
+├── reflection/      # PatternDetector, SequenceDetector, ShadowEvaluator, StrategyExtractor
+├── ingest/          # Claude Code log ingestion (reads ~/.claude/ transcripts)
 ├── storage/         # TrajectoryStore, MemoryStore, ScheduleStore, SkillStore, EmbeddingStore
 ├── trajectory/      # TrajectoryLogger, PII sanitizer
 ├── llm/             # LiteLLM client, ModelRouter (failover), health tracking, embeddings
 ├── security/        # Bearer token auth middleware, auto-generated tokens
-├── loop.py          # EvolutionLoop (dual path: domains + sequences + re-forge)
+├── loop.py          # EvolutionLoop (dual path: domains + sequences + strategies + re-forge)
+├── mcp_server.py    # MCP server — expose skills to Claude Code / Cursor / any MCP client
 ├── server.py        # FastAPI server + WebSocket + Slack lifecycle + auth
 ├── bootstrap.py     # Runtime wiring + forged skill reload
-├── cli.py           # Typer CLI (run, chat, slack, skills, evolve, serve)
+├── cli.py           # Typer CLI (run, chat, ingest, status, skills, evolve, mcp-serve, serve)
 └── config.py        # Environment-based configuration
 ```
 
 **Two evolution paths:**
 
 1. **Domain-based** — Extraction requests to the same domain 3+ times → forge a deterministic skill → register → route future requests at $0
-2. **Sequence-based** — Recurring tool-call patterns (A→B→C) across sessions → forge composite skill → register → skip LLM planning
+2. **Sequence-based** — Recurring tool-call patterns (A→B→C) across sessions → forge composite skill (with retry/fallback/conditional logic) → register → skip LLM planning
+
+**Additional learning:**
+
+3. **Strategy extraction** — After expensive Claude Code sessions, the LLM identifies reusable strategies and registers them as cached prompt skills
+4. **Forge failure tracking** — Domains that repeatedly fail synthesis are abandoned, saving LLM credits
+5. **Continuous shadow evaluation** — Every skill invocation probabilistically triggers a background LLM comparison; sustained agreement promotes confidence, disagreement triggers degradation
+6. **Confidence promotion** — Forged skills automatically earn routing confidence through shadow evaluation, organically reaching the routing threshold
 
 **Skill re-forging** — When a forged skill's shadow agreement drops below threshold, the system automatically gathers fresh trajectory data and re-synthesizes a replacement.
 
@@ -265,6 +308,7 @@ The general agent's `web_fetch` calls now log synthetic `llm_extract` records, s
 | `send_email` | Send email via SMTP | When SMTP configured |
 | `shell_exec` | Execute shell commands | CLI: on, Server: opt-in |
 | `python_eval` | Execute Python code | CLI: on, Server: opt-in |
+| `claude_code` | Delegate tasks to Claude Code CLI | Opt-in (`EVOSYS_ENABLE_CLAUDE_CODE=true`) |
 
 ## Built-in Skills
 
@@ -287,7 +331,7 @@ Plus any skills the system forges at runtime from observed patterns.
 
 ```bash
 uv sync --group dev          # install dev dependencies
-pytest tests/ -v             # run tests (656 tests)
+pytest tests/ -v             # run tests (739 tests)
 ruff check src/ tests/       # lint
 pyright src/evosys/          # type check
 ```
@@ -303,17 +347,27 @@ uv sync --group migrations        # Alembic for production schema migrations
 
 ## Current Status (v0.1.0)
 
-**656 tests, ruff clean, pyright 0 errors. ~10K source lines.**
+**739 tests, ruff clean, pyright 0 errors. ~11K source lines.**
 
 ### Implemented
 
-- **ReAct agent loop** — general-purpose task execution with 15 tools
+- **ReAct agent loop** — general-purpose task execution with 16 tools (including Claude Code delegation)
 - **Self-evolution loop** — observe → detect patterns → forge skills → persist to DB
+- **Claude Code integration** — invoke via tool, capture intermediate steps (stream-json), extract strategies from expensive sessions
+- **MCP server** — expose skills to Claude Code / Cursor / any MCP client (`evosys mcp-serve`)
+- **Claude Code log ingestion** — read ~/.claude/ transcripts and learn from independent sessions (`evosys ingest`)
+- **Learning dashboard** — `evosys status` shows skills, trajectories, domains, and forged skill confidence
 - **Skill persistence** — forged skills survive restarts; source code stored and recompiled on bootstrap
 - **Skill re-forging** — degraded skills are automatically re-synthesized from fresh trajectories
-- **34 built-in extraction skills** — deterministic parsing for common domains (recipes, products, news, academic papers, GitHub, Reddit)
+- **Forge failure tracking** — abandoned domains stop wasting LLM credits
+- **Branching composite skills** — retry, skip, fallback, and conditional error handling policies
+- **Strategy extraction** — LLM reflects on expensive sessions to create reusable strategy skills
+- **Continuous shadow evaluation** — every invocation probabilistically compares skill vs LLM output; confidence auto-promotes
+- **CLI tool visibility** — real-time tool-call display in chat mode, skill usage highlighted in output
+- **Auto-evolution** — CLI one-shot mode runs evolution after every task, prints what was learned
+- **34 built-in extraction skills** — deterministic parsing for common domains
 - **Cross-session memory** — `remember`/`recall` with namespace isolation
-- **Semantic memory** — embedding-based recall via `semantic_recall` tool (hybrid vector + keyword search)
+- **Semantic memory** — embedding-based recall via `semantic_recall` tool
 - **LLM failover** — `ModelRouter` with ordered fallback chain, per-model health tracking, and cooldown
 - **Sub-agent delegation** — `delegate_task` tool spawns depth-limited child agents, supports parallel execution
 - **Slack bot** — Socket Mode integration, thread → session mapping, markdown → mrkdwn conversion
@@ -321,15 +375,8 @@ uv sync --group migrations        # Alembic for production schema migrations
 - **Conversation mode** — Rich interactive REPL (`evosys chat`) with session persistence
 - **Skill marketplace** — export/import skills as portable manifest files
 - **Browser profiles** — named persistent Playwright contexts with cookie state
-- **Local model routing** — Ollama probe + tier strategy for routing simple tasks locally
 - **Authentication** — Bearer token middleware with auto-generated tokens
-- **Outbound webhooks** — notify external services on task_complete, skill_forged, evolution_cycle
-- **Scheduled monitoring** — `watch`/`inbox` with background scheduler
-- **Browser rendering** — Playwright path for JavaScript-heavy sites (opt-in)
-- **External actions** — HTTP API calls and email notifications
-- **Shadow evaluation** — compare forged skills against LLM ground truth; degrade on drift
 - **Safety** — AST-checked forge code, opt-in dangerous tools, PII sanitizer, request timeouts
-- **Learning from both agents** — general agent web fetches feed the evolution loop
 
 ### Not Yet Implemented
 

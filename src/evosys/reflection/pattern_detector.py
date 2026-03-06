@@ -46,6 +46,8 @@ class PatternDetector:
         candidates: list[PatternCandidate] = []
 
         for domain, records in records_by_domain.items():
+            # Only count successful records for pattern detection
+            records = [r for r in records if r.success]
             if len(records) < self._min_frequency:
                 continue
 

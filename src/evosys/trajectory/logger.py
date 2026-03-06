@@ -37,6 +37,7 @@ class TrajectoryLogger:
         latency_ms: float = 0.0,
         skill_used: str | None = None,
         parent_task_id: ULID | None = None,
+        success: bool = True,
     ) -> TrajectoryRecord:
         """Create, sanitize, persist, and return a trajectory record."""
         sanitized_params = sanitize_dict(action_params) if action_params else {}
@@ -54,6 +55,7 @@ class TrajectoryLogger:
             token_cost=token_cost,
             latency_ms=latency_ms,
             skill_used=skill_used,
+            success=success,
         )
 
         await self._store.save(record)

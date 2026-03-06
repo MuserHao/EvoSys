@@ -23,6 +23,7 @@ class TestTrajectoryRow:
             "token_cost",
             "latency_ms",
             "skill_used",
+            "success",
         }
         assert expected == cols
 

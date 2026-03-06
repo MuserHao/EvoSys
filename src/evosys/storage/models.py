@@ -30,6 +30,7 @@ class TrajectoryRow(Base):
     token_cost: Mapped[int] = mapped_column(Integer, default=0)
     latency_ms: Mapped[float] = mapped_column(Float, default=0.0)
     skill_used: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    success: Mapped[bool | None] = mapped_column(Boolean, default=True, nullable=True)
 
     __table_args__ = (
         Index("ix_trajectory_session_ts", "session_id", "timestamp_utc"),

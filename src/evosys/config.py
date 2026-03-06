@@ -76,6 +76,13 @@ class EvoSysConfig:
     reforge_enabled: bool = True
     reforge_min_samples: int = 3
 
+    # --- External agent: Claude Code ---
+    enable_claude_code: bool = False
+    claude_code_path: str = ""            # auto-detect from PATH if empty
+    claude_code_timeout_s: float = 300.0
+    claude_code_max_budget_usd: float = 0.0  # 0 = no limit
+    claude_code_model: str = ""           # empty = use claude's default
+
     # --- Auth (Phase 4.2) ---
     auth_enabled: bool = False
     auth_token: str = ""
@@ -161,4 +168,15 @@ class EvoSysConfig:
             kwargs["auth_enabled"] = v.lower() in {"1", "true", "yes"}
         if v := os.environ.get("EVOSYS_AUTH_TOKEN"):
             kwargs["auth_token"] = v
+        # Claude Code
+        if v := os.environ.get("EVOSYS_ENABLE_CLAUDE_CODE"):
+            kwargs["enable_claude_code"] = v.lower() in {"1", "true", "yes"}
+        if v := os.environ.get("EVOSYS_CLAUDE_CODE_PATH"):
+            kwargs["claude_code_path"] = v
+        if v := os.environ.get("EVOSYS_CLAUDE_CODE_TIMEOUT_S"):
+            kwargs["claude_code_timeout_s"] = float(v)
+        if v := os.environ.get("EVOSYS_CLAUDE_CODE_MAX_BUDGET_USD"):
+            kwargs["claude_code_max_budget_usd"] = float(v)
+        if v := os.environ.get("EVOSYS_CLAUDE_CODE_MODEL"):
+            kwargs["claude_code_model"] = v
         return cls(**kwargs)  # type: ignore[arg-type]

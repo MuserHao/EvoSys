@@ -21,6 +21,17 @@ if TYPE_CHECKING:
 console = Console()
 
 
+def _tool_call_display(
+    tool_name: str, success: bool, latency_ms: float
+) -> None:
+    """Print a tool call as it happens — real-time feedback."""
+    icon = "[green]✓[/green]" if success else "[red]✗[/red]"
+    console.print(
+        f"  {icon} [dim]{tool_name}[/dim] "
+        f"[dim]({latency_ms:.0f}ms)[/dim]"
+    )
+
+
 class CLIChatSession:
     """Interactive conversation session with the EvoSys agent.
 
@@ -63,6 +74,9 @@ class CLIChatSession:
         if self._session_name and self._memory:
             await self._load_session()
 
+        # Wire up tool-call callback for live progress display
+        self._agent._on_tool_call = _tool_call_display
+
         while True:
             try:
                 user_input = Prompt.ask("[bold blue]You[/bold blue]")
@@ -91,11 +105,33 @@ class CLIChatSession:
                     "session": self._session_name or "ephemeral",
                 }
 
-            console.print("[dim]Thinking...[/dim]")
+            console.print()
 
             try:
-                result = await self._agent.run(task=user_input, context=context)
-                self._history.append({"role": "assistant", "content": result.answer})
+                result = await self._agent.run(
+                    task=user_input, context=context
+                )
+                self._history.append(
+                    {"role": "assistant", "content": result.answer}
+                )
+
+                # Build subtitle with skill info
+                subtitle_parts = [
+                    f"{result.total_tokens} tokens",
+                    f"{result.iterations} iters",
+                ]
+                # Check if any tool results used skills
+                skills_used = {
+                    tr.tool_name
+                    for tr in result.tool_results
+                    if tr.tool_name.startswith("extract:")
+                    or tr.tool_name.startswith("composite:")
+                    or tr.tool_name.startswith("strategy:")
+                }
+                if skills_used:
+                    subtitle_parts.append(
+                        f"skills: {', '.join(skills_used)}"
+                    )
 
                 console.print()
                 console.print(
@@ -104,14 +140,17 @@ class CLIChatSession:
                         title="[bold green]EvoSys[/bold green]",
                         border_style="green",
                         subtitle=(
-                            f"[dim]{result.total_tokens} tokens"
-                            f" | {result.iterations} iters[/dim]"
+                            f"[dim]{' | '.join(subtitle_parts)}[/dim]"
                         ),
                     )
                 )
 
                 # Auto-save session periodically
-                if self._session_name and self._memory and len(self._history) % 5 == 0:
+                if (
+                    self._session_name
+                    and self._memory
+                    and len(self._history) % 5 == 0
+                ):
                     await self._save_session()
 
             except Exception as exc:
@@ -144,9 +183,13 @@ class CLIChatSession:
         if cmd == "/save":
             if self._session_name and self._memory:
                 await self._save_session()
-                console.print(f"[green]Session '{self._session_name}' saved.[/green]")
+                console.print(
+                    f"[green]Session '{self._session_name}' saved.[/green]"
+                )
             else:
-                console.print("[dim]No session name set. Use --session NAME.[/dim]")
+                console.print(
+                    "[dim]No session name set. Use --session NAME.[/dim]"
+                )
             return True
 
         console.print(f"[dim]Unknown command: {cmd}[/dim]")
@@ -167,7 +210,9 @@ class CLIChatSession:
         """Load previous conversation history from memory store."""
         if not self._memory or not self._session_name:
             return
-        data = await self._memory.get("chat_history", namespace=self._session_name)
+        data = await self._memory.get(
+            "chat_history", namespace=self._session_name
+        )
         if data:
             try:
                 self._history = json.loads(data)

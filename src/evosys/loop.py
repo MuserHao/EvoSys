@@ -19,13 +19,16 @@ from ulid import ULID
 
 from evosys.core.types import IOPair
 from evosys.forge.composite_forge import CompositeForge
+from evosys.forge.failure_tracker import ForgeFailureTracker
 from evosys.forge.forge import SkillForge
 from evosys.reflection.pattern_detector import PatternCandidate, PatternDetector
 from evosys.reflection.sequence_detector import SequenceDetector
 from evosys.reflection.shadow_evaluator import ShadowEvaluator
+from evosys.reflection.strategy_extractor import StrategyExtractor
 from evosys.schemas._types import ForgeStatus, SkillStatus, new_ulid
 from evosys.schemas.skill import SkillRecord
 from evosys.schemas.slice import SliceCandidate
+from evosys.schemas.trajectory import TrajectoryRecord
 from evosys.skills.registry import SkillRegistry
 from evosys.storage.trajectory_store import TrajectoryStore
 from evosys.tools.registry import ToolRegistry
@@ -50,6 +53,8 @@ class EvolveCycleResult:
     composites_forged: int = 0
     # Skills whose shadow agreement dropped below threshold this cycle
     skills_degraded: int = 0
+    # Strategy extraction from expensive sessions
+    strategies_extracted: int = 0
 
 
 class EvolutionLoop:
@@ -71,6 +76,8 @@ class EvolutionLoop:
         skill_store: SkillStore | None = None,
         reforge_enabled: bool = True,
         reforge_min_samples: int = 3,
+        failure_tracker: ForgeFailureTracker | None = None,
+        strategy_extractor: StrategyExtractor | None = None,
     ) -> None:
         self._store = store
         self._forge = forge
@@ -91,6 +98,8 @@ class EvolutionLoop:
         self._skill_store = skill_store
         self._reforge_enabled = reforge_enabled
         self._reforge_min_samples = reforge_min_samples
+        self._failure_tracker = failure_tracker
+        self._strategy_extractor = strategy_extractor
 
     async def run_cycle(self) -> EvolveCycleResult:
         """Execute one evolution cycle and return a summary."""
@@ -121,6 +130,17 @@ class EvolutionLoop:
             if skill_name in self._registry:
                 already_covered += 1
                 log.info("evolve.already_covered", skill_name=skill_name)
+                continue
+
+            # Skip domains that have been abandoned due to repeated failures
+            if (
+                self._failure_tracker is not None
+                and await self._failure_tracker.should_skip(pattern.domain)
+            ):
+                log.info(
+                    "evolve.domain_abandoned",
+                    domain=pattern.domain,
+                )
                 continue
 
             # Convert pattern to SliceCandidate for the forge.
@@ -166,6 +186,10 @@ class EvolutionLoop:
                 candidate, domain=pattern.domain, sample_io=sample_io or None
             )
             if record is not None:
+                # Record success to clear any prior failure history
+                if self._failure_tracker is not None:
+                    await self._failure_tracker.record_success(pattern.domain)
+
                 # Shadow-evaluate the forged skill; degrade it if agreement
                 # is below threshold so it won't be routed to.
                 degraded = await self._shadow_evaluate(record, pattern)
@@ -180,8 +204,47 @@ class EvolutionLoop:
                     confidence=record.confidence_score,
                     shadow_agreement=record.shadow_agreement_rate,
                 )
+            else:
+                # Record forge failure
+                if self._failure_tracker is not None:
+                    await self._failure_tracker.record_failure(
+                        pattern.domain, self._forge.last_forge_error
+                    )
 
-        # Path 2: tool-call sequence detection (Phase 9)
+        # Path 2: strategy extraction from expensive claude_code sessions
+        strategies_extracted = 0
+        if self._strategy_extractor is not None:
+            tool_records = await self._store.get_tool_trajectories()
+            # Group by session and find sessions with claude_code calls
+            sessions: dict[str, list[TrajectoryRecord]] = {}
+            for rec in tool_records:
+                sid = str(rec.session_id)
+                sessions.setdefault(sid, []).append(rec)
+
+            for _sid, recs in sessions.items():
+                cc_recs = [
+                    r
+                    for r in recs
+                    if "claude_code" in r.action_name
+                ]
+                if not cc_recs:
+                    continue
+                cost = sum(
+                    float(
+                        r.action_result.get("cost_usd", 0)
+                    )
+                    for r in cc_recs
+                )
+                record = (
+                    await self._strategy_extractor.extract_from_session(
+                        recs, cost
+                    )
+                )
+                if record is not None:
+                    strategies_extracted += 1
+                    new_skills.append(record)
+
+        # Path 3: tool-call sequence detection (Phase 9)
         sequences_detected = 0
         composites_forged = 0
 
@@ -202,6 +265,33 @@ class EvolutionLoop:
                             sequence=seq_candidate.canonical_form,
                         )
 
+                # Path 2b: detect fallback patterns and forge branching composites
+                fallbacks = self._sequence_detector.detect_fallbacks(
+                    tool_records
+                )
+                if fallbacks:
+                    from evosys.forge.composite_forge import CompositeStep, OnError
+
+                    for failed_tool, fallback_tool in fallbacks.items():
+                        step = CompositeStep(
+                            tool_name=failed_tool,
+                            on_error=OnError.SKIP,
+                            fallback_tool=fallback_tool,
+                        )
+                        record = await self._composite_forge.forge_branching(
+                            [step],
+                            frequency=0,
+                        )
+                        if record is not None:
+                            composites_forged += 1
+                            new_skills.append(record)
+                            log.info(
+                                "evolve.branching_forged",
+                                skill_name=record.name,
+                                failed_tool=failed_tool,
+                                fallback=fallback_tool,
+                            )
+
         result = EvolveCycleResult(
             candidates_found=len(patterns),
             already_covered=already_covered,
@@ -211,6 +301,7 @@ class EvolutionLoop:
             sequences_detected=sequences_detected,
             composites_forged=composites_forged,
             skills_degraded=skills_degraded,
+            strategies_extracted=strategies_extracted,
         )
 
         # Path 3: Re-forge degraded skills
@@ -239,6 +330,7 @@ class EvolutionLoop:
             degraded=result.skills_degraded,
             sequences=result.sequences_detected,
             composites=result.composites_forged,
+            strategies=result.strategies_extracted,
         )
 
         return result
