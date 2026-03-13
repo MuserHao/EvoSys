@@ -12,11 +12,11 @@ from typing import NamedTuple
 
 import orjson
 from sqlalchemy import select
-from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from evosys.schemas._types import SkillStatus
 from evosys.schemas.skill import SkillRecord
+from evosys.storage.engine import upsert_stmt
 from evosys.storage.models import SkillRow
 
 
@@ -37,19 +37,21 @@ class SkillStore:
         """Upsert a forged skill.  Overwrites if the name already exists."""
         now = datetime.now(UTC)
         record_json = orjson.dumps(record.model_dump(mode="json")).decode()
-        stmt = (
-            sqlite_insert(SkillRow)
-            .values(
-                name=record.name,
-                record_json=record_json,
-                source_code=source_code,
-                created_at=now,
-                updated_at=now,
-            )
-            .on_conflict_do_update(
-                index_elements=["name"],
-                set_={"record_json": record_json, "source_code": source_code, "updated_at": now},
-            )
+        stmt = upsert_stmt(
+            SkillRow,
+            values={
+                "name": record.name,
+                "record_json": record_json,
+                "source_code": source_code,
+                "created_at": now,
+                "updated_at": now,
+            },
+            index_elements=["name"],
+            update_set={
+                "record_json": record_json,
+                "source_code": source_code,
+                "updated_at": now,
+            },
         )
         async with self._session_factory() as session, session.begin():
             await session.execute(stmt)

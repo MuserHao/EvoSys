@@ -11,8 +11,9 @@ loop can learn from Claude Code sessions the user ran independently.
 
 from __future__ import annotations
 
+import hashlib
 import json
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -26,7 +27,7 @@ from evosys.storage.trajectory_store import TrajectoryStore
 
 log = structlog.get_logger()
 
-_NAMESPACE = "ingest_state"
+_NAMESPACE = "_system:ingest_state"
 _DEFAULT_CLAUDE_DIR = Path.home() / ".claude" / "projects"
 
 
@@ -47,7 +48,7 @@ class _ToolCallPair:
 
     tool_name: str
     tool_use_id: str
-    input_data: dict[str, Any] = field(default_factory=dict)
+    input_data: dict[str, Any]
     output_text: str = ""
     success: bool = True
     timestamp: str = ""
@@ -85,12 +86,25 @@ class ClaudeCodeIngestor:
         for filepath in jsonl_files:
             file_key = str(filepath.relative_to(self._claude_dir))
 
-            # Check if already ingested
+            # Compute content hash for crash-safe dedup
+            try:
+                content_bytes = filepath.read_bytes()
+                content_hash = hashlib.sha256(content_bytes).hexdigest()[:16]
+            except OSError:
+                stats.errors += 1
+                continue
+
+            # Check if already ingested (by file key AND content hash)
             marker = await self._memory.get(
                 file_key, namespace=_NAMESPACE
             )
             if marker is not None:
-                continue
+                try:
+                    marker_data = json.loads(marker)
+                    if marker_data.get("content_hash") == content_hash:
+                        continue  # same file, same content → skip
+                except (json.JSONDecodeError, TypeError):
+                    continue  # marker exists but unparseable → skip
 
             stats.files_new += 1
             try:
@@ -99,12 +113,13 @@ class ClaudeCodeIngestor:
                 if n_calls > 0:
                     stats.sessions_ingested += 1
 
-                # Mark as ingested
+                # Mark as ingested with content hash for crash recovery
                 await self._memory.set(
                     file_key,
                     json.dumps({
                         "ingested_at": datetime.now(UTC).isoformat(),
                         "tool_calls": n_calls,
+                        "content_hash": content_hash,
                     }),
                     namespace=_NAMESPACE,
                 )

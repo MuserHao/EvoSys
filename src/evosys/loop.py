@@ -55,6 +55,8 @@ class EvolveCycleResult:
     skills_degraded: int = 0
     # Strategy extraction from expensive sessions
     strategies_extracted: int = 0
+    # Semantic clustering of tool trajectories
+    semantic_clusters_found: int = 0
 
 
 class EvolutionLoop:
@@ -78,6 +80,7 @@ class EvolutionLoop:
         reforge_min_samples: int = 3,
         failure_tracker: ForgeFailureTracker | None = None,
         strategy_extractor: StrategyExtractor | None = None,
+        semantic_detector: object | None = None,  # SemanticPatternDetector
     ) -> None:
         self._store = store
         self._forge = forge
@@ -100,6 +103,7 @@ class EvolutionLoop:
         self._reforge_min_samples = reforge_min_samples
         self._failure_tracker = failure_tracker
         self._strategy_extractor = strategy_extractor
+        self._semantic_detector = semantic_detector
 
     async def run_cycle(self) -> EvolveCycleResult:
         """Execute one evolution cycle and return a summary."""
@@ -211,10 +215,16 @@ class EvolutionLoop:
                         pattern.domain, self._forge.last_forge_error
                     )
 
+        # Fetch tool trajectories once for strategy extraction + sequence detection
+        tool_records: list[TrajectoryRecord] = []
+        if self._strategy_extractor is not None or (
+            self._composite_forge is not None and self._tool_registry is not None
+        ):
+            tool_records = await self._store.get_tool_trajectories()
+
         # Path 2: strategy extraction from expensive claude_code sessions
         strategies_extracted = 0
-        if self._strategy_extractor is not None:
-            tool_records = await self._store.get_tool_trajectories()
+        if self._strategy_extractor is not None and tool_records:
             # Group by session and find sessions with claude_code calls
             sessions: dict[str, list[TrajectoryRecord]] = {}
             for rec in tool_records:
@@ -244,13 +254,31 @@ class EvolutionLoop:
                     strategies_extracted += 1
                     new_skills.append(record)
 
+        # Path 2c: semantic clustering of tool trajectories
+        semantic_clusters_found = 0
+        if self._semantic_detector is not None and tool_records:
+            try:
+                clusters = await self._semantic_detector.detect(tool_records)
+                semantic_clusters_found = len(clusters)
+                if clusters:
+                    log.info(
+                        "evolve.semantic_clusters",
+                        count=len(clusters),
+                        top_label=clusters[0].label if clusters else "",
+                        top_size=len(clusters[0].records) if clusters else 0,
+                    )
+            except Exception:
+                log.exception("evolve.semantic_detection_error")
+
         # Path 3: tool-call sequence detection (Phase 9)
         sequences_detected = 0
         composites_forged = 0
 
-        if self._composite_forge is not None and self._tool_registry is not None:
-            tool_records = await self._store.get_tool_trajectories()
-            if tool_records:
+        if (
+            self._composite_forge is not None
+            and self._tool_registry is not None
+            and tool_records
+        ):
                 seq_candidates = self._sequence_detector.detect(tool_records)
                 sequences_detected = len(seq_candidates)
 
@@ -302,9 +330,10 @@ class EvolutionLoop:
             composites_forged=composites_forged,
             skills_degraded=skills_degraded,
             strategies_extracted=strategies_extracted,
+            semantic_clusters_found=semantic_clusters_found,
         )
 
-        # Path 3: Re-forge degraded skills
+        # Path 4: Re-forge degraded skills; archive if re-forge also fails
         if self._reforge_enabled and skills_degraded > 0:
             try:
                 from evosys.forge.reforger import SkillReforger
@@ -320,6 +349,9 @@ class EvolutionLoop:
                     log.info("evolve.reforged", count=reforged_count)
             except Exception:
                 log.exception("evolve.reforge_error")
+
+        # Path 5: Archive skills that stayed DEGRADED after re-forge attempt
+        await self._archive_stale_degraded()
 
         log.info(
             "evolve.cycle_complete",
@@ -368,6 +400,7 @@ class EvolutionLoop:
                     skill_output=skill_output,
                     llm_output=dict(llm_result),
                     output_schema=dict(record.output_schema),
+                    critical_fields=list(record.critical_output_fields),
                 )
                 total_comparisons += 1
                 if comparison.agreement:
@@ -416,3 +449,32 @@ class EvolutionLoop:
                 )
 
         return degraded
+
+    async def _archive_stale_degraded(self) -> None:
+        """Archive DEGRADED skills with high shadow comparison counts.
+
+        Skills that have been degraded for a while (10+ comparisons and
+        still below threshold) are moved to ARCHIVED so they stop being
+        loaded on bootstrap, evaluated, or cluttering the registry.
+        """
+        for entry in list(self._registry.list_all()):
+            record = entry.record
+            if (
+                record.status == SkillStatus.DEGRADED
+                and record.total_shadow_comparisons >= 10
+                and (record.shadow_agreement_rate or 0) < self._shadow_degradation_threshold
+            ):
+                record.status = SkillStatus.ARCHIVED
+                import contextlib
+                with contextlib.suppress(KeyError):
+                    self._registry.unregister(record.name)
+                if self._skill_store is not None:
+                    with contextlib.suppress(Exception):
+                        await self._skill_store.update_status(
+                            record.name, SkillStatus.ARCHIVED
+                        )
+                log.info(
+                    "evolve.skill_archived",
+                    skill_name=record.name,
+                    agreement_rate=record.shadow_agreement_rate,
+                )

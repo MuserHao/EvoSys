@@ -12,6 +12,8 @@ from evosys.mcp_server import (
     _call_remember,
     _call_skills_list,
     _handle_tool_call,
+    _mcp_to_skill_name,
+    _skill_name_to_mcp,
 )
 
 # ---------------------------------------------------------------------------
@@ -53,6 +55,19 @@ def _make_runtime(
 # ---------------------------------------------------------------------------
 
 
+class TestNameEncoding:
+    def test_roundtrip_simple(self):
+        assert _mcp_to_skill_name(_skill_name_to_mcp("extract:github.com")) == "extract:github.com"
+
+    def test_roundtrip_with_underscores(self):
+        name = "extract:some_api.example.com"
+        assert _mcp_to_skill_name(_skill_name_to_mcp(name)) == name
+
+    def test_roundtrip_composite(self):
+        name = "composite:fetch_parse_abc123"
+        assert _mcp_to_skill_name(_skill_name_to_mcp(name)) == name
+
+
 class TestBuildToolList:
     def test_always_includes_core_tools(self):
         runtime = _make_runtime()
@@ -69,14 +84,14 @@ class TestBuildToolList:
         ])
         tools = _build_tool_list(runtime)
         names = [t["name"] for t in tools]
-        assert "evosys_extract_github_com" in names
+        assert "evosys_extract--c--github--dot--com" in names
 
     def test_skill_description_includes_confidence(self):
         runtime = _make_runtime([
             ("extract:test.com", "Test skill", 0.85),
         ])
         tools = _build_tool_list(runtime)
-        skill_tool = next(t for t in tools if "test_com" in t["name"])
+        skill_tool = next(t for t in tools if "test--dot--com" in t["name"])
         assert "0.85" in skill_tool["description"]
 
 

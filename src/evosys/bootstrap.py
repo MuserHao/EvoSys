@@ -198,11 +198,17 @@ async def bootstrap(
     strategy_extractor = StrategyExtractor(
         llm, skill_registry, skill_store=skill_store
     )
+
+    # Semantic pattern detection (optional, requires embedding provider)
+    from evosys.reflection.semantic_detector import SemanticPatternDetector
+    semantic_detector = SemanticPatternDetector(embedding_provider)
+
     evolution_loop = EvolutionLoop(
         trajectory_store, forge, skill_registry,
         skill_store=skill_store,
         failure_tracker=failure_tracker,
         strategy_extractor=strategy_extractor,
+        semantic_detector=semantic_detector,
     )
 
     # Tool registry + built-in tools
@@ -349,11 +355,15 @@ async def _reload_forged_skills(
     Returns the number of skills successfully reloaded.
     """
     from evosys.forge.forge import _compile_extract, _SynthesizedSkill
+    from evosys.schemas._types import SkillStatus
 
     persisted = await skill_store.load_all()
     reloaded = 0
 
     for ps in persisted:
+        # Skip archived/deprecated skills — they've been retired
+        if ps.record.status in (SkillStatus.ARCHIVED, SkillStatus.DEPRECATED):
+            continue
         if ps.record.name in registry:
             # Built-in or already registered — skip without warning
             continue

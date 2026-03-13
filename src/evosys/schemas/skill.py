@@ -32,6 +32,8 @@ class SkillRecord(EvoBaseModel):
     description: str = Field(min_length=1, max_length=5_000)
     input_schema: dict[str, object] = Field(default_factory=dict)
     output_schema: dict[str, object] = Field(default_factory=dict)
+    # Fields in output_schema that must match exactly for shadow agreement
+    critical_output_fields: list[str] = Field(default_factory=list)
     implementation_type: ImplementationType
     implementation_path: str = Field(min_length=1)
     created_from_traces: list[UlidType] = Field(default_factory=list)
@@ -40,6 +42,8 @@ class SkillRecord(EvoBaseModel):
     invocation_count: int = Field(ge=0, default=0)
     last_invoked: datetime | None = None
     confidence_score: float = Field(ge=0, le=1, default=1.0)
+    # forge_readiness: frequency-based signal (not used for routing)
+    forge_readiness: float = Field(ge=0, le=1, default=0.0)
     status: SkillStatus = SkillStatus.ACTIVE
     created_at: datetime = Field(default_factory=utc_now)
 

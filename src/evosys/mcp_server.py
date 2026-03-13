@@ -97,6 +97,17 @@ async def _stdio_loop(runtime: Any) -> None:
             _write_error(req_id, -32601, f"Method not found: {method}")
 
 
+def _skill_name_to_mcp(name: str) -> str:
+    """Encode a skill name for MCP (reversible)."""
+    return "evosys_" + name.replace(".", "--dot--").replace(":", "--c--")
+
+
+def _mcp_to_skill_name(mcp_name: str) -> str:
+    """Decode an MCP tool name back to a skill name."""
+    stripped = mcp_name.removeprefix("evosys_")
+    return stripped.replace("--c--", ":").replace("--dot--", ".")
+
+
 def _build_tool_list(runtime: Any) -> list[dict[str, Any]]:
     """Build the MCP tools list from registered skills + built-in tools."""
     tools: list[dict[str, Any]] = []
@@ -106,7 +117,7 @@ def _build_tool_list(runtime: Any) -> list[dict[str, Any]]:
         record = entry.record
         input_schema = dict(record.input_schema) if record.input_schema else {}
         tools.append({
-            "name": f"evosys_{record.name.replace(':', '_').replace('.', '_')}",
+            "name": _skill_name_to_mcp(record.name),
             "description": (
                 f"[EvoSys skill] {record.description} "
                 f"(confidence: {record.confidence_score:.2f})"
@@ -287,15 +298,7 @@ async def _call_skill(
     runtime: Any, mcp_tool_name: str, args: dict[str, Any]
 ) -> dict[str, Any]:
     """Invoke a specific EvoSys skill by its MCP tool name."""
-    # Convert MCP name back to skill name: evosys_extract_github_com → extract:github.com
-    stripped = mcp_tool_name.removeprefix("evosys_")
-    # Try direct lookup first
-    parts = stripped.split("_", 1)
-    skill_name = (
-        f"{parts[0]}:{parts[1].replace('_', '.')}"
-        if len(parts) == 2
-        else stripped
-    )
+    skill_name = _mcp_to_skill_name(mcp_tool_name)
 
     entry = runtime.skill_registry.lookup(skill_name)
     if entry is None:

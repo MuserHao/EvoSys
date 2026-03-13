@@ -11,6 +11,9 @@ class ShadowEvaluator(BaseShadowEvaluator):
 
     Uses field-level exact match for agreement, and computes a
     similarity score based on the fraction of matching top-level keys.
+
+    If *critical_fields* are specified, any mismatch on a critical field
+    forces disagreement regardless of overall similarity.
     """
 
     async def compare(
@@ -18,6 +21,8 @@ class ShadowEvaluator(BaseShadowEvaluator):
         skill_output: dict[str, object],
         llm_output: dict[str, object],
         output_schema: dict[str, object],
+        *,
+        critical_fields: list[str] | None = None,
     ) -> ShadowComparison:
         """Compare *skill_output* against *llm_output*."""
         if not llm_output:
@@ -42,6 +47,9 @@ class ShadowEvaluator(BaseShadowEvaluator):
 
         matching = 0
         mismatches: list[str] = []
+        critical_mismatch = False
+        crit = set(critical_fields or [])
+
         for key in all_keys:
             s_val = skill_output.get(key)
             l_val = llm_output.get(key)
@@ -49,13 +57,28 @@ class ShadowEvaluator(BaseShadowEvaluator):
                 matching += 1
             else:
                 mismatches.append(key)
+                if key in crit:
+                    critical_mismatch = True
 
         similarity = matching / len(all_keys)
-        agreement = similarity >= 0.8
+
+        # Critical field mismatch forces disagreement
+        agreement = not critical_mismatch and similarity >= 0.8
 
         notes = ""
         if mismatches:
-            notes = f"Mismatched fields: {', '.join(sorted(mismatches))}"
+            critical_note = [m for m in mismatches if m in crit]
+            regular_note = [m for m in mismatches if m not in crit]
+            parts = []
+            if critical_note:
+                parts.append(
+                    f"CRITICAL mismatches: {', '.join(sorted(critical_note))}"
+                )
+            if regular_note:
+                parts.append(
+                    f"Mismatched fields: {', '.join(sorted(regular_note))}"
+                )
+            notes = "; ".join(parts)
 
         return ShadowComparison(
             skill_output=skill_output,

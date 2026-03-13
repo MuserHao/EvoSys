@@ -96,8 +96,8 @@ class MaturationStage(StrEnum):
 class SkillStatus(StrEnum):
     ACTIVE = "active"
     DEGRADED = "degraded"
-    DEPRECATED = "deprecated"
     ARCHIVED = "archived"
+    DEPRECATED = "deprecated"
 
 
 class ForgeStatus(StrEnum):

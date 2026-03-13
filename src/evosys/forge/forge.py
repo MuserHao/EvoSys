@@ -147,9 +147,10 @@ class SkillForge(BaseForge):
             implementation_path=f"forge:synthesized:{domain}",
             test_suite_path="auto-generated",
             pass_rate=pass_rate if total > 0 else 1.0,
-            confidence_score=min(
-                1.0, candidate.boundary_confidence * (pass_rate if total > 0 else 0.5)
-            ),
+            # confidence_score: correctness signal only (pass_rate)
+            # Not mixed with frequency — frequency goes to forge_readiness
+            confidence_score=pass_rate if total > 0 else 0.5,
+            forge_readiness=min(1.0, candidate.boundary_confidence),
             input_schema=input_schema,
             output_schema=output_schema,
             created_from_traces=list(candidate.occurrence_trace_ids),

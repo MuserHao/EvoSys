@@ -5,9 +5,9 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 from sqlalchemy import delete, select
-from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from evosys.storage.engine import upsert_stmt
 from evosys.storage.models import MemoryRow
 
 
@@ -26,13 +26,16 @@ class MemoryStore:
     async def set(self, key: str, value: str, *, namespace: str = "default") -> None:
         """Store *value* under *key* in *namespace*, overwriting if present."""
         now = datetime.now(UTC)
-        stmt = (
-            sqlite_insert(MemoryRow)
-            .values(namespace=namespace, key=key, value=value, updated_at=now)
-            .on_conflict_do_update(
-                index_elements=["namespace", "key"],
-                set_={"value": value, "updated_at": now},
-            )
+        stmt = upsert_stmt(
+            MemoryRow,
+            values={
+                "namespace": namespace,
+                "key": key,
+                "value": value,
+                "updated_at": now,
+            },
+            index_elements=["namespace", "key"],
+            update_set={"value": value, "updated_at": now},
         )
         async with self._session_factory() as session, session.begin():
             await session.execute(stmt)

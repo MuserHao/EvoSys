@@ -147,6 +147,20 @@ class StrategyExtractor:
             )
             return None
 
+        # Persist to DB so the strategy survives restarts
+        if self._skill_store is not None:
+            try:
+                await self._skill_store.save(record, prompt_template)
+                log.info(
+                    "strategy_extractor.persisted",
+                    skill_name=skill_name,
+                )
+            except Exception:
+                log.warning(
+                    "strategy_extractor.persist_failed",
+                    skill_name=skill_name,
+                )
+
         log.info(
             "strategy_extractor.extracted",
             skill_name=skill_name,

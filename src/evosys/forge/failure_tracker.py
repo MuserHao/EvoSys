@@ -16,7 +16,7 @@ from evosys.storage.memory_store import MemoryStore
 
 log = structlog.get_logger()
 
-_NAMESPACE = "forge_failures"
+_NAMESPACE = "_system:forge_failures"
 
 
 @dataclass
